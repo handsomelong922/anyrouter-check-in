@@ -6,6 +6,10 @@
 
 import os
 import sys
+
+# 添加项目根目录到 Python 路径
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+
 from dotenv import load_dotenv
 
 # 加载.env文件
@@ -70,8 +74,8 @@ def test_config():
     print('1. 手动测试签到：')
     print('   uv run checkin.py')
     print()
-    print('2. 设置定时任务（以管理员身份运行PowerShell）：')
-    print('   .\\setup_schedule.ps1')
+    print('2. 设置定时任务（右键"以管理员身份运行"）：')
+    print('   scripts\\setup_task.bat')
     print()
     print('注意：首次运行会启动浏览器获取 WAF cookies，这是正常的！')
     print('=' * 60)

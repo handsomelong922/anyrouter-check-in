@@ -8,8 +8,8 @@ echo AnyRouter 自动签到脚本启动
 echo 时间: %date% %time%
 echo ========================================
 
-REM 切换到脚本所在目录
-cd /d "%~dp0"
+REM 切换到项目根目录（脚本所在目录的上级目录）
+cd /d "%~dp0.."
 
 REM 检查uv是否安装
 where uv >nul 2>&1

@@ -8,6 +8,45 @@
 
 ---
 
+## 📁 项目结构
+
+```
+anyrouter-check-in/
+├── checkin.py                主程序（已汉化）
+├── README.md                 使用文档
+├── config/                   配置文件夹
+│   └── .env.template         配置模板
+├── scripts/                  脚本文件夹
+│   ├── run_checkin.bat       运行脚本
+│   └── setup_task.bat        一键设置定时任务
+├── tests/                    测试文件夹
+│   └── test_config.py        配置验证
+├── docs/                     文档文件夹
+│   └── SECURITY_CHECKLIST.md 安全检查清单
+└── utils/                    工具模块
+    ├── config.py             配置管理
+    └── notify.py             通知模块
+```
+
+---
+
+## 🚀 快速使用（3步）
+
+```bash
+# 1. 复制配置模板
+copy config\.env.template .env
+
+# 2. 编辑 .env 填入你的账号信息
+notepad .env
+
+# 3. 右键"以管理员身份运行"设置定时任务
+scripts\setup_task.bat
+```
+
+**详细教程请继续阅读下文** ↓
+
+---
+
 ## 功能特性
 
 - ✅ 多平台支持（兼容 NewAPI 与 OneAPI）
@@ -43,20 +82,23 @@ powershell -c "irm https://astral.sh/uv/install.ps1 | iex"
 uv sync --dev
 uv run playwright install chromium
 
-# 4. 配置账号（将配置模板复制为实际配置文件）
-copy .env.local .env
-
-# 5. 编辑 .env 文件，填入你的账号信息
+# 4. 配置账号
+copy config\.env.template .env
 notepad .env
 
-# 6. 测试运行
+# 5. 测试运行
 uv run checkin.py
 
-# 7. 设置定时任务（以管理员身份运行 PowerShell）
-.\setup_schedule.ps1
+# 6. 设置定时任务（右键"以管理员身份运行"）
+scripts\setup_task.bat
 ```
 
 **配置完成后**：Windows 任务计划程序将每 6 小时自动运行签到（00:00、06:00、12:00、18:00）
+
+**注意事项**：
+- 首次运行会弹出 Chrome 浏览器窗口（用于获取 WAF cookies），这是正常现象
+- 签到失败或余额变化时会自动发送通知（如已配置通知渠道）
+- `.env` 文件包含敏感信息，不要分享或上传到公共平台
 
 ---
 
@@ -210,7 +252,7 @@ CUSTOM_SMTP_SERVER=smtp.gmail.com:587
 ### 本地运行
 - 使用 Windows 任务计划程序
 - 默认每 6 小时执行一次
-- 可通过 `setup_schedule.ps1 -Interval 4` 调整间隔
+- 右键运行 `scripts\setup_task.bat` 可自动配置
 
 ### GitHub Actions
 - 默认每 6 小时触发一次
@@ -274,15 +316,28 @@ CUSTOM_SMTP_SERVER=smtp.gmail.com:587
 ```
 anyrouter-check-in/
 ├── checkin.py              主程序（已汉化）
-├── utils/                  工具模块
-│   ├── config.py          配置管理（已修复 JSON 解析）
-│   └── notify.py          通知模块
-├── .env.local             配置模板（已填入示例）
-├── .env.template          空白配置模板
-├── run_checkin.bat        Windows 运行脚本
-├── setup_schedule.ps1     自动配置定时任务
-├── test_config.py         配置验证脚本
-└── README.md              本文档
+├── README.md              本文档
+├── LICENSE                许可证
+├── pyproject.toml         项目配置
+├── uv.lock                依赖锁定
+├── .env                   本地配置（敏感，不提交）
+│
+├── config/                配置文件夹
+│   └── .env.template      配置模板
+│
+├── scripts/               脚本文件夹
+│   ├── run_checkin.bat    运行脚本
+│   └── setup_task.bat     一键设置定时任务
+│
+├── docs/                  文档文件夹
+│   └── SECURITY_CHECKLIST.md  安全检查清单
+│
+├── tests/                 测试文件夹
+│   └── test_config.py     配置验证脚本
+│
+└── utils/                 工具模块
+    ├── config.py          配置管理（已修复 JSON 解析）
+    └── notify.py          通知模块
 ```
 
 ---
@@ -292,7 +347,7 @@ anyrouter-check-in/
 运行配置测试脚本，验证配置是否正确：
 
 ```bash
-uv run python test_config.py
+uv run python tests/test_config.py
 ```
 
 成功输出示例：
@@ -311,7 +366,7 @@ uv run python test_config.py
 uv run checkin.py
 
 # 方式2：使用批处理脚本
-.\run_checkin.bat manual
+scripts\run_checkin.bat manual
 ```
 
 **预期结果：**
@@ -394,11 +449,21 @@ uv run ruff check .
 
 ## 更新日志
 
+### v2.1.0 (2025-12-16)
+- 🎨 重组项目文件结构，提升可维护性
+  - 配置文件移至 `config/` 目录
+  - 脚本文件移至 `scripts/` 目录
+  - 文档文件移至 `docs/` 目录
+  - 测试文件移至 `tests/` 目录
+- 🗑️ 删除冗余脚本，只保留最优方案
+- 📝 优化 README 文档，添加快速使用指南
+
 ### v2.0.0 (2025-12-16)
 - ✨ 新增本地运行支持
 - ✨ 全面汉化界面
 - 🐛 修复 JSON 多行解析问题
 - 🐛 修复 AgentRouter 签到逻辑错误
+- 🐛 修复环境变量加载顺序问题（先加载 dotenv 再导入 notify）
 - 📝 完善文档和配置说明
 - 🔧 新增 Windows 定时任务自动配置脚本
 
@@ -426,19 +491,16 @@ MIT License
 
 ```bash
 # 复制配置文件
-copy .env.local .env
+copy config\.env.template .env
 
 # 手动运行签到
 uv run checkin.py
 
 # 测试配置是否正确
-uv run python test_config.py
+uv run python tests/test_config.py
 
-# 设置定时任务（需管理员权限）
-.\setup_schedule.ps1
-
-# 修改定时间隔为 4 小时
-.\setup_schedule.ps1 -Interval 4
+# 设置定时任务（右键"以管理员身份运行"）
+scripts\setup_task.bat
 ```
 
 ---
