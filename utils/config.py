@@ -28,11 +28,11 @@ class ProviderConfig:
 			for item in self.waf_cookie_names:
 				name = "" if not item or not isinstance(item, str) else item.strip()
 				if not name:
-					print(f'[WARNING] Found invalid WAF cookie name: {item}')
+					print(f'[警告] 发现无效的 WAF cookie 名称: {item}')
 					continue
 
 				required_waf_cookies.add(name)
-		
+
 		if not required_waf_cookies:
 			self.bypass_method = None
 
@@ -63,7 +63,9 @@ class ProviderConfig:
 
 	def needs_manual_check_in(self) -> bool:
 		"""判断是否需要手动调用签到接口"""
-		return self.bypass_method == 'waf_cookies'
+		# 只有当sign_in_path不为None时才需要手动签到
+		# agentrouter的sign_in_path为None，查询用户信息时自动完成签到
+		return self.sign_in_path is not None
 
 
 @dataclass
@@ -105,7 +107,7 @@ class AppConfig:
 				providers_data = json.loads(providers_str)
 
 				if not isinstance(providers_data, dict):
-					print('[WARNING] PROVIDERS must be a JSON object, ignoring custom providers')
+					print('[警告] PROVIDERS 必须是 JSON 对象，忽略自定义 providers')
 					return cls(providers=providers)
 
 				# 解析自定义 providers,会覆盖默认配置
@@ -113,16 +115,16 @@ class AppConfig:
 					try:
 						providers[name] = ProviderConfig.from_dict(name, provider_data)
 					except Exception as e:
-						print(f'[WARNING] Failed to parse provider "{name}": {e}, skipping')
+						print(f'[警告] 解析 provider "{name}" 失败: {e}，跳过')
 						continue
 
-				print(f'[INFO] Loaded {len(providers_data)} custom provider(s) from PROVIDERS environment variable')
+				print(f'[信息] 从 PROVIDERS 环境变量加载了 {len(providers_data)} 个自定义 provider')
 			except json.JSONDecodeError as e:
 				print(
-					f'[WARNING] Failed to parse PROVIDERS environment variable: {e}, using default configuration only'
+					f'[警告] 解析 PROVIDERS 环境变量失败: {e}，仅使用默认配置'
 				)
 			except Exception as e:
-				print(f'[WARNING] Error loading PROVIDERS: {e}, using default configuration only')
+				print(f'[警告] 加载 PROVIDERS 时出错: {e}，仅使用默认配置')
 
 		return cls(providers=providers)
 
@@ -157,33 +159,64 @@ def load_accounts_config() -> list[AccountConfig] | None:
 	"""从环境变量加载账号配置"""
 	accounts_str = os.getenv('ANYROUTER_ACCOUNTS')
 	if not accounts_str:
-		print('ERROR: ANYROUTER_ACCOUNTS environment variable not found')
+		print('错误: 未找到 ANYROUTER_ACCOUNTS 环境变量')
 		return None
 
 	try:
-		accounts_data = json.loads(accounts_str)
+		# 先尝试直接解析
+		try:
+			accounts_data = json.loads(accounts_str)
+		except json.JSONDecodeError as parse_error:
+			# 如果失败，可能是因为JSON中有未转义的控制字符（比如换行符、制表符）
+			# 尝试清理后再解析一次
+			print(f'[警告] 初始 JSON 解析失败: {parse_error}')
+			print('[信息] 正在尝试清理 JSON 字符串（这是一个临时方案，请使用单行 JSON 格式）...')
+
+			# 简单清理：去除JSON结构外的控制字符
+			# 注意：这只是一个workaround，最好的方式还是使用正确的单行JSON格式
+			import re
+			# 去除所有换行符、回车符和制表符（但这可能影响字符串值内部的内容）
+			# 更安全的方式是只清理JSON结构外的空白字符，但这需要更复杂的解析
+			cleaned_str = re.sub(r'[\n\r\t]+', '', accounts_str)
+			# 去除多余的空格（JSON键值对之间的空格）
+			cleaned_str = re.sub(r'\s+', ' ', cleaned_str)
+			# 去除冒号和逗号后的空格
+			cleaned_str = re.sub(r':\s+', ':', cleaned_str)
+			cleaned_str = re.sub(r',\s+', ',', cleaned_str)
+
+			try:
+				accounts_data = json.loads(cleaned_str)
+				print('[信息] 清理 JSON 字符串后解析成功')
+				print('[提示] 为获得更好的性能，请在环境变量中使用单行 JSON 格式')
+			except json.JSONDecodeError as second_error:
+				print(f'[错误] 清理后 JSON 解析仍然失败: {second_error}')
+				print('[提示] 请检查你的 JSON 格式：')
+				print('[提示]   - 使用在线 JSON 验证器（https://jsonlint.com/）')
+				print('[提示]   - 确保所有引号都正确转义')
+				print('[提示]   - 使用单行格式: [{"cookies":{...},"api_user":"..."}]')
+				raise second_error
 
 		if not isinstance(accounts_data, list):
-			print('ERROR: Account configuration must use array format [{}]')
+			print('错误: 账号配置必须使用数组格式 [{}]')
 			return None
 
 		accounts = []
 		for i, account_dict in enumerate(accounts_data):
 			if not isinstance(account_dict, dict):
-				print(f'ERROR: Account {i + 1} configuration format is incorrect')
+				print(f'错误: 账号 {i + 1} 配置格式不正确')
 				return None
 
 			if 'cookies' not in account_dict or 'api_user' not in account_dict:
-				print(f'ERROR: Account {i + 1} missing required fields (cookies, api_user)')
+				print(f'错误: 账号 {i + 1} 缺少必需字段（cookies, api_user）')
 				return None
 
 			if 'name' in account_dict and not account_dict['name']:
-				print(f'ERROR: Account {i + 1} name field cannot be empty')
+				print(f'错误: 账号 {i + 1} name 字段不能为空')
 				return None
 
 			accounts.append(AccountConfig.from_dict(account_dict, i))
 
 		return accounts
 	except Exception as e:
-		print(f'ERROR: Account configuration format is incorrect: {e}')
+		print(f'错误: 账号配置格式不正确: {e}')
 		return None
