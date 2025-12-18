@@ -10,7 +10,18 @@ cd /d "%~dp0.."
 REM 设置日志文件路径（使用绝对路径）
 set "PROJECT_ROOT=%~dp0.."
 set "LOG_FILE=%PROJECT_ROOT%\task_run.log"
-set "UV_PATH=C:\Users\admin\.local\bin\uv.exe"
+
+REM 自动检测uv路径
+set "UV_PATH="
+for %%i in (uv.exe) do set "UV_PATH=%%~$PATH:i"
+if not defined UV_PATH (
+    REM 尝试常见安装路径
+    if exist "%USERPROFILE%\.local\bin\uv.exe" (
+        set "UV_PATH=%USERPROFILE%\.local\bin\uv.exe"
+    ) else if exist "%LOCALAPPDATA%\Programs\uv\uv.exe" (
+        set "UV_PATH=%LOCALAPPDATA%\Programs\uv\uv.exe"
+    )
+)
 
 REM 开始记录日志（如果不是手动运行模式，则重定向所有输出到日志文件）
 if NOT "%1"=="manual" (
@@ -25,9 +36,9 @@ echo 时间: %date% %time%
 echo 工作目录: %CD%
 echo ========================================
 
-REM 检查uv是否存在（使用完整路径）
-if not exist "%UV_PATH%" (
-    echo [错误] 未找到uv命令: %UV_PATH%
+REM 检查uv是否存在
+if not defined UV_PATH (
+    echo [错误] 未找到uv命令！
     echo 安装方法: powershell -c "irm https://astral.sh/uv/install.ps1 | iex"
     pause
     exit /b 1
@@ -78,9 +89,10 @@ REM 定时任务模式：将输出重定向到日志文件
     echo.
 
     REM 检查uv是否存在
-    if not exist "%UV_PATH%" (
-        echo [错误] 未找到uv命令: %UV_PATH%
+    if not defined UV_PATH (
+        echo [错误] 未找到uv命令！
         echo [提示] 请检查uv是否正确安装
+        echo [提示] 安装方法: powershell -c "irm https://astral.sh/uv/install.ps1 | iex"
         echo.
         echo ========================================
         echo 执行结束: %date% %time%
