@@ -66,9 +66,9 @@ def parse_cookies(cookies_data):
 	return {}
 
 
-async def get_waf_cookies_with_playwright(account_name: str, login_url: str, required_cookies: list[str]):
-	"""使用 Playwright 获取 WAF cookies（隐私模式）"""
-	print(f'[处理中] {account_name}: 正在启动浏览器获取 WAF cookies...')
+async def get_waf_cookies_and_trigger_login(account_name: str, domain: str, login_url: str, required_cookies: list[str], user_session: str):
+	"""使用 Playwright 获取 WAF cookies 并触发真实登录以完成签到"""
+	print(f'[浏览器] {account_name}: 正在启动浏览器并模拟登录...')
 
 	async with async_playwright() as p:
 		import tempfile
@@ -91,8 +91,7 @@ async def get_waf_cookies_with_playwright(account_name: str, login_url: str, req
 			page = await context.new_page()
 
 			try:
-				print(f'[处理中] {account_name}: 正在访问登录页面获取初始 cookies...')
-
+				# 第一步：访问登录页面获取WAF cookies
 				await page.goto(login_url, wait_until='networkidle')
 
 				try:
@@ -109,8 +108,6 @@ async def get_waf_cookies_with_playwright(account_name: str, login_url: str, req
 					if cookie_name in required_cookies and cookie_value is not None:
 						waf_cookies[cookie_name] = cookie_value
 
-				print(f'[信息] {account_name}: 已获取 {len(waf_cookies)} 个 WAF cookies')
-
 				missing_cookies = [c for c in required_cookies if c not in waf_cookies]
 
 				if missing_cookies:
@@ -118,14 +115,51 @@ async def get_waf_cookies_with_playwright(account_name: str, login_url: str, req
 					await context.close()
 					return None
 
-				print(f'[成功] {account_name}: 成功获取所有 WAF cookies')
+				print(f'[成功] {account_name}: 已获取 {len(waf_cookies)} 个 WAF cookies')
+
+				# 第二步：设置用户session cookie并访问关键页面触发签到
+				from urllib.parse import urlparse
+				parsed_domain = urlparse(domain)
+				cookie_domain = parsed_domain.netloc
+
+				# 添加用户session cookie
+				await context.add_cookies([{
+					'name': 'session',
+					'value': user_session,
+					'domain': cookie_domain,
+					'path': '/',
+					'httpOnly': True,
+					'secure': True,
+					'sameSite': 'Lax'
+				}])
+
+				# 访问首页
+				await page.goto(domain, wait_until='networkidle')
+				await page.wait_for_timeout(2000)
+
+				# 访问OAuth回调页面（关键步骤）
+				print(f'[登录] {account_name}: 访问控制台触发签到...')
+				try:
+					await page.goto(f'{domain}/console/token', wait_until='networkidle', timeout=10000)
+					await page.wait_for_timeout(2000)
+				except Exception:
+					pass
+
+				# 访问控制台首页（触发/api/user/self调用）
+				try:
+					await page.goto(f'{domain}/console', wait_until='networkidle', timeout=10000)
+					await page.wait_for_timeout(3000)
+				except Exception:
+					pass
+
+				print(f'[成功] {account_name}: 登录流程完成')
 
 				await context.close()
 
 				return waf_cookies
 
 			except Exception as e:
-				print(f'[失败] {account_name}: 获取 WAF cookies 时发生错误: {e}')
+				print(f'[失败] {account_name}: 浏览器操作失败: {e}')
 				await context.close()
 				return None
 
@@ -153,14 +187,27 @@ def get_user_info(client, headers, user_info_url: str):
 
 
 async def prepare_cookies(account_name: str, provider_config, user_cookies: dict) -> dict | None:
-	"""准备请求所需的 cookies（可能包含 WAF cookies）"""
+	"""准备请求所需的 cookies（可能包含 WAF cookies），并触发真实登录完成签到"""
 	waf_cookies = {}
 
 	if provider_config.needs_waf_cookies():
+		# 获取用户session（从user_cookies中提取）
+		user_session = user_cookies.get('session', '')
+		if not user_session:
+			print(f'[失败] {account_name}: cookies中未找到session')
+			return None
+
 		login_url = f'{provider_config.domain}{provider_config.login_path}'
-		waf_cookies = await get_waf_cookies_with_playwright(account_name, login_url, provider_config.waf_cookie_names)
+		# 新函数：同时获取WAF cookies并触发真实登录
+		waf_cookies = await get_waf_cookies_and_trigger_login(
+			account_name,
+			provider_config.domain,
+			login_url,
+			provider_config.waf_cookie_names,
+			user_session
+		)
 		if not waf_cookies:
-			print(f'[失败] {account_name}: 无法获取 WAF cookies')
+			print(f'[失败] {account_name}: 无法获取 WAF cookies 或触发登录')
 			return None
 	else:
 		print(f'[信息] {account_name}: 无需绕过 WAF，直接使用用户 cookies')
@@ -169,7 +216,7 @@ async def prepare_cookies(account_name: str, provider_config, user_cookies: dict
 
 
 def execute_check_in(client, account_name: str, provider_config, headers: dict):
-	"""执行签到请求"""
+	"""执行签到请求（仅用于配置了sign_in_path的自定义provider）"""
 	print(f'[网络] {account_name}: 正在执行签到')
 
 	checkin_headers = headers.copy()
@@ -178,20 +225,21 @@ def execute_check_in(client, account_name: str, provider_config, headers: dict):
 	sign_in_url = f'{provider_config.domain}{provider_config.sign_in_path}'
 	response = client.post(sign_in_url, headers=checkin_headers, timeout=30)
 
-	print(f'[响应] {account_name}: 响应状态码 {response.status_code}')
-
 	if response.status_code == 200:
 		try:
 			result = response.json()
 			if result.get('ret') == 1 or result.get('code') == 0 or result.get('success'):
-				print(f'[成功] {account_name}: 签到成功！')
+				msg = result.get('msg', result.get('message', ''))
+				if '已签到' in msg or '已经签到' in msg:
+					print(f'[信息] {account_name}: {msg}')
+				else:
+					print(f'[成功] {account_name}: 签到成功！{msg}')
 				return True
 			else:
 				error_msg = result.get('msg', result.get('message', '未知错误'))
 				print(f'[失败] {account_name}: 签到失败 - {error_msg}')
 				return False
 		except json.JSONDecodeError:
-			# 如果不是 JSON 响应，检查是否包含成功标识
 			if 'success' in response.text.lower():
 				print(f'[成功] {account_name}: 签到成功！')
 				return True
@@ -234,7 +282,7 @@ async def check_in_account(account: AccountConfig, account_index: int, app_confi
 			'Accept': 'application/json, text/plain, */*',
 			'Accept-Language': 'zh-CN,zh;q=0.9,en;q=0.8',
 			'Accept-Encoding': 'gzip, deflate, br, zstd',
-			'Referer': provider_config.domain,
+			'Referer': f'{provider_config.domain}/console/token',  # 修改为OAuth回调页面
 			'Origin': provider_config.domain,
 			'Connection': 'keep-alive',
 			'Sec-Fetch-Dest': 'empty',
@@ -244,18 +292,50 @@ async def check_in_account(account: AccountConfig, account_index: int, app_confi
 		}
 
 		user_info_url = f'{provider_config.domain}{provider_config.user_info_path}'
-		user_info = get_user_info(client, headers, user_info_url)
-		if user_info and user_info.get('success'):
-			print(user_info['display'])
-		elif user_info:
-			print(user_info.get('error', '未知错误'))
 
+		# 查询签到前余额
+		print(f'[信息] {account_name}: 查询签到前余额')
+		user_info_before = get_user_info(client, headers, user_info_url)
+		if user_info_before and user_info_before.get('success'):
+			print(f'[签到前] {user_info_before["display"]}')
+			balance_before = user_info_before['quota']
+		elif user_info_before:
+			print(user_info_before.get('error', '未知错误'))
+			balance_before = None
+		else:
+			balance_before = None
+
+		# 执行签到
 		if provider_config.needs_manual_check_in():
 			success = execute_check_in(client, account_name, provider_config, headers)
-			return success, user_info
+
+			# 签到后再次查询余额，查看是否增加
+			if success:
+				print(f'[信息] {account_name}: 查询签到后余额')
+				user_info_after = get_user_info(client, headers, user_info_url)
+				if user_info_after and user_info_after.get('success'):
+					print(f'[签到后] {user_info_after["display"]}')
+					balance_after = user_info_after['quota']
+
+					# 对比前后余额
+					if balance_before is not None and balance_after is not None:
+						diff = round(balance_after - balance_before, 2)
+						if diff > 0:
+							print(f'[成功] {account_name}: 余额增加了 ${diff}')
+						elif diff == 0:
+							print(f'[警告] {account_name}: 余额未变化，可能今日已签到')
+						else:
+							print(f'[异常] {account_name}: 余额减少了 ${abs(diff)}')
+
+					return success, user_info_after
+				else:
+					# 签到后查询失败，返回签到前的信息
+					return success, user_info_before
+			else:
+				return success, user_info_before
 		else:
 			print(f'[信息] {account_name}: 签到已自动完成（通过用户信息请求触发）')
-			return True, user_info
+			return True, user_info_before
 
 	except Exception as e:
 		print(f'[失败] {account_name}: 签到过程中发生错误 - {str(e)[:50]}...')
