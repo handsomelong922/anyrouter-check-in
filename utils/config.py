@@ -82,7 +82,7 @@ class AppConfig:
 				name='anyrouter',
 				domain='https://anyrouter.top',
 				login_path='/login',
-				sign_in_path=None,  # 无需签到接口，登录时自动完成签到（与agentrouter相同）
+				sign_in_path='/api/user/sign_in',  # anyrouter需要调用签到接口
 				user_info_path='/api/user/self',
 				api_user_key='new-api-user',
 				bypass_method='waf_cookies',
@@ -92,7 +92,7 @@ class AppConfig:
 				name='agentrouter',
 				domain='https://agentrouter.org',
 				login_path='/login',
-				sign_in_path=None,  # 无需签到接口，查询用户信息时自动完成签到
+				sign_in_path=None,  # agentrouter无需签到接口，登录时自动完成签到
 				user_info_path='/api/user/self',
 				api_user_key='new-api-user',
 				bypass_method='waf_cookies',
