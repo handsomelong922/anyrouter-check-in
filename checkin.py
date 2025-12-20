@@ -254,6 +254,8 @@ async def prepare_cookies_with_waf(
 		login_url=login_url,
 		required_cookies=provider.waf_cookie_names or [],
 		user_session=user_session,
+		api_user=api_user,
+		api_user_key=provider.api_user_key,
 		log_fn=print
 	)
 

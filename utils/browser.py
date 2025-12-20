@@ -245,6 +245,8 @@ async def get_waf_cookies_and_trigger_signin(
 	login_url: str,
 	required_cookies: list[str],
 	user_session: str,
+	api_user: str,
+	api_user_key: str = 'new-api-user',
 	log_fn: Callable[[str], None] | None = None
 ) -> BrowserResult:
 	"""使用 Playwright 获取 WAF cookies 并触发签到
@@ -255,6 +257,8 @@ async def get_waf_cookies_and_trigger_signin(
 	    login_url: 登录页面 URL
 	    required_cookies: 需要获取的 WAF cookie 名称列表
 	    user_session: 用户 session cookie 值
+	    api_user: API 用户标识
+	    api_user_key: API 用户请求头名称
 	    log_fn: 日志输出函数
 
 	Returns:
@@ -312,6 +316,37 @@ async def get_waf_cookies_and_trigger_signin(
 			console_url = f'{domain}/console'
 			log(f'[签到] {account_name}: 访问控制台触发签到 ({console_url})...')
 			await page.goto(console_url, wait_until='networkidle')
+
+			# 第六步：主动调用 /api/user/self 触发签到（AgentRouter 登录时自动签到）
+			log(f'[签到] {account_name}: 主动调用 /api/user/self 触发签到...')
+			try:
+				# 注入 api_user 和 api_user_key 到 JavaScript
+				user_self_result = await page.evaluate(f'''
+					async () => {{
+						try {{
+							const response = await fetch('/api/user/self', {{
+								method: 'GET',
+								credentials: 'include',
+								headers: {{
+									'Accept': 'application/json',
+									'Content-Type': 'application/json',
+									'{api_user_key}': '{api_user}'
+								}}
+							}});
+							const data = await response.json();
+							return {{ success: response.ok, status: response.status, data: data }};
+						}} catch (e) {{
+							return {{ success: false, error: e.message }};
+						}}
+					}}
+				''')
+				if user_self_result.get('success'):
+					log(f'[成功] {account_name}: /api/user/self 调用成功')
+					api_calls.append(f'GET {domain}/api/user/self (browser)')
+				else:
+					log(f'[警告] {account_name}: /api/user/self 调用失败: {user_self_result}')
+			except Exception as e:
+				log(f'[警告] {account_name}: 浏览器内 API 调用失败: {str(e)[:50]}')
 
 			log(f'[等待] {account_name}: 等待签到逻辑执行（{SIGNIN_TRIGGER_WAIT_MS // 1000}秒）...')
 			await page.wait_for_timeout(SIGNIN_TRIGGER_WAIT_MS)
