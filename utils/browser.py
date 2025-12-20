@@ -308,9 +308,10 @@ async def get_waf_cookies_and_trigger_signin(
 			log(f'[登录] {account_name}: 重新设置 session（模拟重新登录）...')
 			await _set_session_cookie(context, domain, user_session)
 
-			# 第五步：访问首页触发签到
-			log(f'[签到] {account_name}: 访问首页触发签到...')
-			await page.goto(domain, wait_until='networkidle')
+			# 第五步：访问控制台页面触发签到（首页不会触发，必须访问 /console）
+			console_url = f'{domain}/console'
+			log(f'[签到] {account_name}: 访问控制台触发签到 ({console_url})...')
+			await page.goto(console_url, wait_until='networkidle')
 
 			log(f'[等待] {account_name}: 等待签到逻辑执行（{SIGNIN_TRIGGER_WAIT_MS // 1000}秒）...')
 			await page.wait_for_timeout(SIGNIN_TRIGGER_WAIT_MS)
