@@ -332,24 +332,19 @@ async def process_single_account(
 
 	# 检查冷却期
 	if last_signin:
-		print(f'[历史] {account_name}: 上次签到时间: {last_signin.strftime("%Y-%m-%d %H:%M:%S")}')
-		if last_balance is not None:
-			print(f'[历史] {account_name}: 上次记录余额: ${last_balance}')
-
 		if is_in_cooldown(last_signin):
 			next_signin = get_next_signin_time(last_signin)
 			remaining = format_time_remaining(next_signin)
-			print(f'[冷却] {account_name}: 24小时冷却期内，剩余 {remaining}')
-			print(f'[跳过] {account_name}: 跳过本次签到，等待冷却期结束')
+			print(f'[已跳过] {account_name} | 上次签到时间: {last_signin.strftime("%Y-%m-%d %H:%M:%S")} | 剩余冷却: {remaining}')
 			return SigninResult(
 				account_key=account_key,
 				account_name=account_name,
 				status=SigninStatus.SKIPPED,
 				balance_before=last_balance
 			)
-		print(f'[冷却] {account_name}: 冷却期已过，可以签到')
+		print(f'[可签到] {account_name}: 冷却期已过')
 	else:
-		print(f'[历史] {account_name}: 首次签到或无历史记录')
+		print(f'[首次] {account_name}: 首次签到')
 
 	# 获取 provider 配置
 	provider = app_config.get_provider(account.provider)
@@ -429,14 +424,15 @@ async def process_single_account(
 		)
 
 		# 输出结果
+		now_str = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
 		if result.status == SigninStatus.SUCCESS:
-			print(f'[成功] {account_name}: 余额增加了 ${result.balance_diff}！本次签到成功')
+			print(f'[签到成功] {account_name} | 余额: ${result.balance_before} → ${result.balance_after} (+${result.balance_diff}) | 时间: {now_str}')
 		elif result.status == SigninStatus.FIRST_RUN:
-			print(f'[首次] {account_name}: 首次运行，记录当前余额 ${current_balance}')
+			print(f'[首次运行] {account_name} | 当前余额: ${current_balance} | 时间: {now_str}')
 		elif result.status == SigninStatus.COOLDOWN:
-			print(f'[冷却] {account_name}: 余额未变化（24小时冷却期内）')
+			print(f'[已签到] {account_name}: 余额未变化（今日已签到）')
 		elif result.status == SigninStatus.FAILED:
-			print(f'[失败] {account_name}: 余额未变化或减少，签到失败')
+			print(f'[签到失败] {account_name}: 余额未变化或减少')
 
 		return result
 
