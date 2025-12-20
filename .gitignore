@@ -1,9 +1,20 @@
-.claude
+# 敏感配置
 .env
-.venv
-__pycache__
-.pytest_cache
-.ruff_cache
-balance_hash.txt
-task_run.log
-*.log
+.claude
+
+# Python 运行时
+.venv/
+__pycache__/
+*.pyc
+
+# 工具缓存
+.pytest_cache/
+.ruff_cache/
+
+# 运行时数据（签到产生）
+data/
+
+# IDE
+.idea/
+.vscode/
+*.swp

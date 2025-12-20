@@ -17,6 +17,7 @@ load_dotenv()
 
 from utils.config import AppConfig, load_accounts_config
 
+
 def test_config():
     """测试配置是否正确"""
     print('=' * 60)

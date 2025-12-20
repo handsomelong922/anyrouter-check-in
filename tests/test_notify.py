@@ -1,3 +1,6 @@
+#!/usr/bin/env python3
+"""通知模块测试"""
+
 import os
 import sys
 from datetime import datetime
@@ -13,12 +16,39 @@ sys.path.insert(0, str(project_root))
 
 load_dotenv(project_root / '.env')
 
-from utils.notify import NotificationKit
+from utils.notify import NotificationError, NotificationKit
 
 
 @pytest.fixture
-def notification_kit():
-	return NotificationKit()
+def mock_env():
+	"""设置测试环境变量"""
+	env_backup = os.environ.copy()
+
+	os.environ['EMAIL_USER'] = 'test@example.com'
+	os.environ['EMAIL_PASS'] = 'test_password'
+	os.environ['EMAIL_TO'] = 'recipient@example.com'
+	os.environ['PUSHPLUS_TOKEN'] = 'test_pushplus_token'
+	os.environ['SERVERPUSHKEY'] = 'test_server_key'
+	os.environ['DINGDING_WEBHOOK'] = 'https://oapi.dingtalk.com/robot/send?access_token=test'
+	os.environ['FEISHU_WEBHOOK'] = 'https://open.feishu.cn/open-apis/bot/v2/hook/test'
+	os.environ['WEIXIN_WEBHOOK'] = 'https://qyapi.weixin.qq.com/cgi-bin/webhook/send?key=test'
+	os.environ['GOTIFY_URL'] = 'https://gotify.example.com'
+	os.environ['GOTIFY_TOKEN'] = 'test_gotify_token'
+	os.environ['TELEGRAM_BOT_TOKEN'] = 'test_bot_token'
+	os.environ['TELEGRAM_CHAT_ID'] = '123456789'
+
+	yield
+
+	os.environ.clear()
+	os.environ.update(env_backup)
+
+
+@pytest.fixture
+def notification_kit(mock_env):
+	"""创建带 mock 环境变量的 NotificationKit"""
+	kit = NotificationKit()
+	kit._config_loaded = False  # 强制重新加载配置
+	return kit
 
 
 def test_real_notification(notification_kit):
@@ -31,8 +61,9 @@ def test_real_notification(notification_kit):
 	)
 
 
-@patch('smtplib.SMTP_SSL')
+@patch('utils.notify.smtplib.SMTP_SSL')
 def test_send_email(mock_smtp, notification_kit):
+	"""测试邮件发送"""
 	mock_server = MagicMock()
 	mock_smtp.return_value.__enter__.return_value = mock_server
 
@@ -42,79 +73,179 @@ def test_send_email(mock_smtp, notification_kit):
 	assert mock_server.send_message.called
 
 
-@patch('requests.post')
-def test_send_pushplus(mock_post, notification_kit):
+@patch('utils.notify.httpx.Client')
+def test_send_pushplus(mock_client_class, notification_kit):
+	"""测试 PushPlus 发送"""
+	mock_client = MagicMock()
+	mock_response = MagicMock()
+	mock_response.status_code = 200
+	mock_client.post.return_value = mock_response
+	mock_client_class.return_value.__enter__.return_value = mock_client
+
 	notification_kit.send_pushplus('测试标题', '测试内容')
 
-	mock_post.assert_called_once()
-	args = mock_post.call_args[1]
-	assert 'test_token' in str(args)
+	mock_client.post.assert_called_once()
+	call_args = mock_client.post.call_args
+	assert 'pushplus.plus' in call_args[0][0]
 
 
-@patch('requests.post')
-def test_send_dingtalk(mock_post, notification_kit):
+@patch('utils.notify.httpx.Client')
+def test_send_dingtalk(mock_client_class, notification_kit):
+	"""测试钉钉发送"""
+	mock_client = MagicMock()
+	mock_response = MagicMock()
+	mock_response.status_code = 200
+	mock_client.post.return_value = mock_response
+	mock_client_class.return_value.__enter__.return_value = mock_client
+
 	notification_kit.send_dingtalk('测试标题', '测试内容')
 
-	expected_webhook = 'https://oapi.dingtalk.com/robot/send?access_token=fbcd45f32f17dea5c762e82644c7f28945075e0b4d22953c8eebe064b106a96f'
-	expected_data = {'msgtype': 'text', 'text': {'content': '测试标题\n测试内容'}}
+	mock_client.post.assert_called_once()
+	call_args = mock_client.post.call_args
+	assert 'dingtalk' in call_args[0][0]
 
-	mock_post.assert_called_once_with(expected_webhook, json=expected_data)
 
+@patch('utils.notify.httpx.Client')
+def test_send_feishu(mock_client_class, notification_kit):
+	"""测试飞书发送"""
+	mock_client = MagicMock()
+	mock_response = MagicMock()
+	mock_response.status_code = 200
+	mock_client.post.return_value = mock_response
+	mock_client_class.return_value.__enter__.return_value = mock_client
 
-@patch('requests.post')
-def test_send_feishu(mock_post, notification_kit):
 	notification_kit.send_feishu('测试标题', '测试内容')
 
-	mock_post.assert_called_once()
-	args = mock_post.call_args[1]
-	assert 'card' in args['json']
+	mock_client.post.assert_called_once()
+	call_args = mock_client.post.call_args
+	assert 'card' in str(call_args)
 
 
-@patch('requests.post')
-def test_send_wecom(mock_post, notification_kit):
+@patch('utils.notify.httpx.Client')
+def test_send_wecom(mock_client_class, notification_kit):
+	"""测试企业微信发送"""
+	mock_client = MagicMock()
+	mock_response = MagicMock()
+	mock_response.status_code = 200
+	mock_client.post.return_value = mock_response
+	mock_client_class.return_value.__enter__.return_value = mock_client
+
 	notification_kit.send_wecom('测试标题', '测试内容')
 
-	mock_post.assert_called_once_with(
-		'http://weixin.example.com', json={'msgtype': 'text', 'text': {'content': '测试标题\n测试内容'}}
-	)
+	mock_client.post.assert_called_once()
 
 
-@patch('httpx.Client')
+@patch('utils.notify.httpx.Client')
 def test_send_gotify(mock_client_class, notification_kit):
-	mock_client_instance = MagicMock()
-	mock_client_class.return_value.__enter__.return_value = mock_client_instance
+	"""测试 Gotify 发送（使用 Header 认证）"""
+	mock_client = MagicMock()
+	mock_response = MagicMock()
+	mock_response.status_code = 200
+	mock_client.post.return_value = mock_response
+	mock_client_class.return_value.__enter__.return_value = mock_client
 
 	notification_kit.send_gotify('测试标题', '测试内容')
 
-	expected_url = 'https://gotify.example.com/message?token=test_token'
-	expected_data = {'title': '测试标题', 'message': '测试内容', 'priority': 9}
+	mock_client.post.assert_called_once()
+	call_args = mock_client.post.call_args
 
-	mock_client_instance.post.assert_called_once_with(expected_url, json=expected_data)
+	# 验证使用 Header 认证而非 URL 参数
+	assert 'headers' in call_args.kwargs
+	assert 'X-Gotify-Key' in call_args.kwargs['headers']
+
+
+@patch('utils.notify.httpx.Client')
+def test_send_telegram(mock_client_class, notification_kit):
+	"""测试 Telegram 发送"""
+	mock_client = MagicMock()
+	mock_response = MagicMock()
+	mock_response.status_code = 200
+	mock_client.post.return_value = mock_response
+	mock_client_class.return_value.__enter__.return_value = mock_client
+
+	notification_kit.send_telegram('测试标题', '测试内容')
+
+	mock_client.post.assert_called_once()
+	call_args = mock_client.post.call_args
+	assert 'telegram' in call_args[0][0]
 
 
 def test_missing_config():
+	"""测试缺少配置时抛出 NotificationError"""
+	# 清除环境变量
+	env_backup = os.environ.copy()
 	os.environ.clear()
+
+	try:
+		kit = NotificationKit()
+		kit._config_loaded = False
+
+		with pytest.raises(NotificationError, match='邮件配置不完整'):
+			kit.send_email('测试', '测试')
+
+		with pytest.raises(NotificationError, match='PushPlus Token 未配置'):
+			kit.send_pushplus('测试', '测试')
+
+		with pytest.raises(NotificationError, match='Gotify URL 或 Token 未配置'):
+			kit.send_gotify('测试', '测试')
+	finally:
+		os.environ.clear()
+		os.environ.update(env_backup)
+
+
+@patch('utils.notify.httpx.Client')
+@patch('utils.notify.smtplib.SMTP_SSL')
+def test_push_message(mock_smtp, mock_client_class, notification_kit):
+	"""测试批量推送"""
+	# Mock SMTP
+	mock_server = MagicMock()
+	mock_smtp.return_value.__enter__.return_value = mock_server
+
+	# Mock HTTP Client
+	mock_client = MagicMock()
+	mock_response = MagicMock()
+	mock_response.status_code = 200
+	mock_client.post.return_value = mock_response
+	mock_client_class.return_value.__enter__.return_value = mock_client
+
+	results = notification_kit.push_message('测试标题', '测试内容')
+
+	# 验证返回结果是字典
+	assert isinstance(results, dict)
+
+	# 验证所有渠道都有结果
+	expected_channels = ['Email', 'PushPlus', 'Server酱', '钉钉', '飞书', '企业微信', 'Gotify', 'Telegram']
+	for channel in expected_channels:
+		assert channel in results
+
+
+@patch('utils.notify.httpx.Client')
+def test_response_check(mock_client_class, notification_kit):
+	"""测试 HTTP 响应状态检查"""
+	mock_client = MagicMock()
+	mock_response = MagicMock()
+	mock_response.status_code = 500  # 模拟服务器错误
+	mock_client.post.return_value = mock_response
+	mock_client_class.return_value.__enter__.return_value = mock_client
+
+	with pytest.raises(NotificationError, match='返回错误状态码'):
+		notification_kit.send_pushplus('测试标题', '测试内容')
+
+
+def test_lazy_initialization():
+	"""测试延迟初始化"""
 	kit = NotificationKit()
 
-	with pytest.raises(ValueError, match='未配置邮箱信息'):
-		kit.send_email('测试', '测试')
+	# 初始化时不应该加载配置
+	assert kit._config_loaded is False
 
-	with pytest.raises(ValueError, match='未配置PushPlus Token'):
-		kit.send_pushplus('测试', '测试')
+	# 设置环境变量
+	os.environ['PUSHPLUS_TOKEN'] = 'test_token'
 
-
-@patch('anyrouter.notify.NotificationKit.send_email')
-@patch('anyrouter.notify.NotificationKit.send_dingtalk')
-@patch('anyrouter.notify.NotificationKit.send_wecom')
-@patch('anyrouter.notify.NotificationKit.send_pushplus')
-@patch('anyrouter.notify.NotificationKit.send_feishu')
-@patch('anyrouter.notify.NotificationKit.send_gotify')
-def test_push_message(mock_gotify, mock_feishu, mock_pushplus, mock_wecom, mock_dingtalk, mock_email, notification_kit):
-	notification_kit.push_message('测试标题', '测试内容')
-
-	assert mock_email.called
-	assert mock_dingtalk.called
-	assert mock_wecom.called
-	assert mock_pushplus.called
-	assert mock_feishu.called
-	assert mock_gotify.called
+	try:
+		# 调用方法后应该加载配置
+		kit._load_config()
+		assert kit._config_loaded is True
+		assert kit.pushplus_token == 'test_token'
+	finally:
+		del os.environ['PUSHPLUS_TOKEN']

@@ -78,57 +78,33 @@ if "%1"=="manual" pause
 exit /b !RUN_RESULT!
 
 :LOG_MODE
-REM 定时任务模式：将输出重定向到日志文件
-(
-    echo ========================================
-    echo AnyRouter 自动签到脚本启动 - 定时任务模式
-    echo 时间: %date% %time%
-    echo 工作目录: %CD%
-    echo 项目根目录: %PROJECT_ROOT%
-    echo ========================================
-    echo.
+REM 定时任务模式：Python自己写日志文件，保证UTF-8编码
+echo ========================================
+echo AnyRouter 自动签到脚本启动 - 定时任务模式
+echo 时间: %date% %time%
+echo 工作目录: %CD%
+echo 项目根目录: %PROJECT_ROOT%
+echo ========================================
+echo.
 
-    REM 检查uv是否存在
-    if not defined UV_PATH (
-        echo [错误] 未找到uv命令！
-        echo [提示] 请检查uv是否正确安装
-        echo [提示] 安装方法: powershell -c "irm https://astral.sh/uv/install.ps1 | iex"
-        echo.
-        echo ========================================
-        echo 执行结束: %date% %time%
-        echo ========================================
-    ) else (
-        echo [信息] uv路径: %UV_PATH%
-        echo.
-
-        REM 检查.env文件
-        if not exist "%PROJECT_ROOT%\.env" (
-            echo [警告] 未找到.env配置文件！
-            echo [路径] %PROJECT_ROOT%\.env
-            echo.
-            echo ========================================
-            echo 执行结束: %date% %time%
-            echo ========================================
-        ) else (
-            echo [信息] .env文件: %PROJECT_ROOT%\.env
-            echo.
-
-            REM 运行签到脚本
-            echo [信息] 正在运行签到脚本...
-            echo.
-            "%UV_PATH%" run checkin.py 2>&1
-
-            echo.
-            echo ========================================
-            echo 执行结束: %date% %time%
-            echo ========================================
-        )
-    )
-) > "%LOG_FILE%" 2>&1
-
-REM 检查日志文件是否创建成功
-if exist "%LOG_FILE%" (
-    exit /b 0
-) else (
+REM 检查uv是否存在
+if not defined UV_PATH (
+    echo [错误] 未找到uv命令！
+    echo [提示] 请检查uv是否正确安装
     exit /b 1
 )
+echo [信息] uv路径: %UV_PATH%
+
+REM 检查.env文件
+if not exist "%PROJECT_ROOT%\.env" (
+    echo [警告] 未找到.env配置文件！
+    exit /b 1
+)
+echo [信息] .env文件: %PROJECT_ROOT%\.env
+echo.
+
+REM 运行签到脚本（Python会自己写UTF-8日志）
+echo [信息] 正在运行签到脚本...
+"%UV_PATH%" run checkin.py
+
+exit /b %errorlevel%

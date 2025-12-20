@@ -14,20 +14,29 @@
 
 ```
 anyrouter-check-in/
-├── checkin.py                主程序（已汉化）
-├── README.md                 使用文档
-├── config/                   配置文件夹
-│   └── .env.template         配置模板
+├── checkin.py                主程序
+├── providers.json            Provider 配置
+├── pyproject.toml            项目依赖
+├── .env.template             配置模板
+├── SECURITY_CHECKLIST.md     安全检查清单
 ├── scripts/                  脚本文件夹
 │   ├── run_checkin.bat       运行脚本
 │   └── setup_task.bat        一键设置定时任务
 ├── tests/                    测试文件夹
-│   └── test_config.py        配置验证
-├── docs/                     文档文件夹
-│   └── SECURITY_CHECKLIST.md 安全检查清单
-└── utils/                    工具模块
-    ├── config.py             配置管理
-    └── notify.py             通知模块
+│   ├── test_browser.py       浏览器模块测试
+│   ├── test_config.py        配置验证
+│   ├── test_notify.py        通知模块测试
+│   └── test_result.py        结果模块测试
+├── utils/                    工具模块
+│   ├── browser.py            浏览器自动化
+│   ├── config.py             配置管理
+│   ├── constants.py          常量定义
+│   ├── notify.py             通知模块
+│   └── result.py             签到结果管理
+└── data/                     运行时数据（自动生成，已忽略）
+    ├── balance_hash.txt      余额哈希
+    ├── signin_history.json   签到历史
+    └── task_run.log          运行日志
 ```
 
 ---
@@ -36,7 +45,7 @@ anyrouter-check-in/
 
 ```bash
 # 1. 复制配置模板
-copy config\.env.template .env
+copy .env.template .env
 
 # 2. 编辑 .env 填入你的账号信息
 notepad .env
@@ -66,6 +75,7 @@ scripts\setup_task.bat
 ### 方式一：本地运行（推荐 24 小时开机用户）
 
 **适合场景**：
+
 - 电脑 24 小时开机
 - 需要精准定时执行
 - 希望完全掌控运行环境
@@ -85,7 +95,7 @@ uv sync --dev
 uv run playwright install chromium
 
 # 4. 配置账号
-copy config\.env.template .env
+copy .env.template .env
 notepad .env
 
 # 5. 测试运行
@@ -98,6 +108,7 @@ scripts\setup_task.bat
 **配置完成后**：Windows 任务计划程序将每 6 小时自动运行签到（00:00、06:00、12:00、18:00）
 
 **注意事项**：
+
 - 首次运行会弹出 Chrome 浏览器窗口（用于获取 WAF cookies），这是正常现象
 - 签到失败或余额变化时会自动发送通知（如已配置通知渠道）
 - `.env` 文件包含敏感信息，不要分享或上传到公共平台
@@ -107,6 +118,7 @@ scripts\setup_task.bat
 ### 方式二：GitHub Actions（推荐无固定电脑用户）
 
 **适合场景**：
+
 - 电脑不是 24 小时开机
 - 希望完全免费自动化
 - 不想占用本地资源
@@ -114,9 +126,11 @@ scripts\setup_task.bat
 **步骤：**
 
 #### 1. Fork 本仓库
+
 点击页面右上角的 "Fork" 按钮
 
 #### 2. 配置 GitHub Secrets
+
 1. 进入你 Fork 的仓库，点击 `Settings` → `Environments`
 2. 点击 `New environment`，创建名为 `production` 的环境
 3. 在 `production` 环境中，点击 `Add environment secret`
@@ -125,6 +139,7 @@ scripts\setup_task.bat
    - **Value**: 你的账号配置（JSON 格式，见下方示例）
 
 #### 3. 启用 Actions
+
 1. 点击仓库的 `Actions` 标签
 2. 如果提示启用，点击 `Enable workflow`
 3. 找到 "AnyRouter 自动签到" workflow
@@ -139,11 +154,13 @@ scripts\setup_task.bat
 访问 [anyrouter.top](https://anyrouter.top) 或 [agentrouter.org](https://agentrouter.org)，登录后按 `F12` 打开开发者工具：
 
 **获取 Session Cookie：**
+
 1. 切换到 `Application` 标签
 2. 左侧选择 `Cookies` → 选择当前网站
 3. 找到 `session` 项，复制其 `Value` 值
 
 **获取 API User：**
+
 1. 切换到 `Network` 标签
 2. 过滤类型选择 `Fetch/XHR`
 3. 刷新页面，点击任意 API 请求
@@ -153,22 +170,26 @@ scripts\setup_task.bat
 ### 账号配置格式
 
 **单账号示例：**
+
 ```json
 [{"name":"我的账号","provider":"anyrouter","cookies":{"session":"你的session值"},"api_user":"你的api_user"}]
 ```
 
 **多账号示例：**
+
 ```json
 [{"name":"账号1","provider":"anyrouter","cookies":{"session":"session1"},"api_user":"12345"},{"name":"账号2","provider":"agentrouter","cookies":{"session":"session2"},"api_user":"67890"}]
 ```
 
 **字段说明：**
+
 - `name`（可选）：账号显示名称，用于日志和通知
 - `provider`（可选）：平台类型，默认 `anyrouter`，可选 `agentrouter`
 - `cookies`（必需）：包含 session 的对象
 - `api_user`（必需）：API 用户标识符
 
 **重要提示：**
+
 - GitHub Actions 中配置时，JSON 必须是**单行格式**
 - 本地 `.env` 文件中现已支持多行格式（会自动清理）
 
@@ -211,6 +232,7 @@ CUSTOM_SMTP_SERVER=smtp.gmail.com:587
 ```
 
 **通知触发条件：**
+
 - 签到失败
 - 账号余额发生变化
 - 首次运行
@@ -222,6 +244,7 @@ CUSTOM_SMTP_SERVER=smtp.gmail.com:587
 内置的 `anyrouter` 和 `agentrouter` 无需额外配置。如需添加其他平台：
 
 **基础配置（仅需域名）：**
+
 ```json
 {
   "customrouter": {
@@ -231,6 +254,7 @@ CUSTOM_SMTP_SERVER=smtp.gmail.com:587
 ```
 
 **完整配置（自定义路径）：**
+
 ```json
 {
   "customrouter": {
@@ -252,11 +276,13 @@ CUSTOM_SMTP_SERVER=smtp.gmail.com:587
 ## 定时任务说明
 
 ### 本地运行
+
 - 使用 Windows 任务计划程序
 - 默认每 6 小时执行一次
 - 右键运行 `scripts\setup_task.bat` 可自动配置
 
 ### GitHub Actions
+
 - 默认每 6 小时触发一次
 - 可能延迟 1-2 小时（GitHub 服务限制）
 - 编辑 `.github/workflows/checkin.yml` 可调整 cron 表达式
@@ -270,6 +296,7 @@ CUSTOM_SMTP_SERVER=smtp.gmail.com:587
 **原因**：每24小时只能签到一次
 
 **解决方案**：
+
 1. 检查上次签到时间（手动登录网站查看）
 2. 等待24小时冷却期后再次运行脚本
 3. 查看脚本输出的余额变化提示：
@@ -281,6 +308,7 @@ CUSTOM_SMTP_SERVER=smtp.gmail.com:587
 **原因**：通知仅在失败或余额变化时发送
 
 **正常情况**：
+
 - 如果所有账号签到成功且余额无变化，不会发送通知
 - 只有首次运行、签到失败、或余额变化时才发送通知
 
@@ -289,6 +317,7 @@ CUSTOM_SMTP_SERVER=smtp.gmail.com:587
 **原因**：Cookies 已过期（有效期约 1 个月）
 
 **解决方案**：
+
 1. 重新登录 anyrouter.top 或 agentrouter.org
 2. 按 F12 获取新的 session 值
 3. 更新 `.env` 文件中的 session
@@ -298,6 +327,7 @@ CUSTOM_SMTP_SERVER=smtp.gmail.com:587
 **原因**：配置中包含未转义的控制字符
 
 **解决方案**：
+
 - 确保 JSON 配置在一行内（GitHub Actions）
 - 本地 `.env` 文件现已支持多行格式
 - 使用在线工具验证 JSON 格式：https://jsonlint.com/
@@ -307,6 +337,7 @@ CUSTOM_SMTP_SERVER=smtp.gmail.com:587
 **原因**：网络延迟或 WAF 检测
 
 **解决方案**：
+
 - 等待 30 秒，通常会自动完成
 - 如果超时，手动关闭浏览器即可
 - 检查网络连接是否正常
@@ -314,13 +345,15 @@ CUSTOM_SMTP_SERVER=smtp.gmail.com:587
 ### 6. 定时任务未运行
 
 **检查步骤**：
+
 1. 按 `Win + R`，输入 `taskschd.msc` 打开任务计划程序
 2. 找到"AnyRouter自动签到"任务
 3. 查看"上次运行结果"和"下次运行时间"
 4. 右键任务 → 运行，测试是否正常
-5. 查看日志文件：`anyrouter-check-in\task_run.log`
+5. 查看日志文件：`anyrouter-check-in\data\task_run.log`
 
 **常见原因**：
+
 - uv命令未找到（已修复：使用完整路径）
 - 权限不足（使用"最高权限"运行）
 - 工作目录错误（已修复：切换到项目根目录）
@@ -331,29 +364,35 @@ CUSTOM_SMTP_SERVER=smtp.gmail.com:587
 
 ```
 anyrouter-check-in/
-├── checkin.py              主程序（已汉化）
-├── README.md              本文档
-├── LICENSE                许可证
-├── pyproject.toml         项目配置
-├── uv.lock                依赖锁定
-├── .env                   本地配置（敏感，不提交）
+├── checkin.py              主程序
+├── providers.json          Provider 配置（可自定义）
+├── pyproject.toml          项目配置
+├── uv.lock                 依赖锁定
+├── .env.template           配置模板
+├── SECURITY_CHECKLIST.md   安全检查清单
+├── .env                    本地配置（敏感，不提交）
 │
-├── config/                配置文件夹
-│   └── .env.template      配置模板
+├── scripts/                脚本文件夹
+│   ├── run_checkin.bat     运行脚本
+│   └── setup_task.bat      一键设置定时任务
 │
-├── scripts/               脚本文件夹
-│   ├── run_checkin.bat    运行脚本
-│   └── setup_task.bat     一键设置定时任务
+├── tests/                  测试文件夹
+│   ├── test_browser.py     浏览器模块测试
+│   ├── test_config.py      配置验证脚本
+│   ├── test_notify.py      通知模块测试
+│   └── test_result.py      结果模块测试
 │
-├── docs/                  文档文件夹
-│   └── SECURITY_CHECKLIST.md  安全检查清单
+├── utils/                  工具模块
+│   ├── browser.py          浏览器自动化（WAF 绕过）
+│   ├── config.py           配置管理
+│   ├── constants.py        常量定义
+│   ├── notify.py           通知模块
+│   └── result.py           签到结果管理
 │
-├── tests/                 测试文件夹
-│   └── test_config.py     配置验证脚本
-│
-└── utils/                 工具模块
-    ├── config.py          配置管理（已修复 JSON 解析）
-    └── notify.py          通知模块
+└── data/                   运行时数据（自动生成，已忽略）
+    ├── balance_hash.txt    余额哈希
+    ├── signin_history.json 签到历史
+    └── task_run.log        运行日志
 ```
 
 ---
@@ -367,6 +406,7 @@ uv run python tests/test_config.py
 ```
 
 成功输出示例：
+
 ```
 [成功] 成功加载 2 个 provider 配置
 [成功] 成功加载 3 个账号配置
@@ -386,6 +426,7 @@ scripts\run_checkin.bat manual
 ```
 
 **预期结果：**
+
 - 浏览器窗口自动打开（获取 WAF cookies）
 - 显示各账号签到状态和余额信息
 - 输出 `[成功] 所有账号签到成功！`
@@ -408,29 +449,32 @@ scripts\run_checkin.bat manual
 本脚本通过以下步骤模拟真实登录并触发签到：
 
 1. **获取WAF保护cookies**
+
    - 使用 Playwright 访问登录页面
    - 获取防护cookies（如 `acw_tc`、`cdn_sec_tc` 等）
-
 2. **设置登录状态**
+
    - 将用户的 session cookie 注入浏览器
    - 访问首页建立登录会话
-
 3. **触发签到逻辑**
+
    - 访问 `/console/token`（模拟OAuth回调）
    - 访问 `/console`（控制台首页）
    - 前端JavaScript自动调用 `/api/user/self`
    - 后端检测到登录行为，自动完成签到
-
 4. **验证签到结果**
+
    - 查询签到前后的账户余额
    - 对比余额变化确认签到是否成功
 
 ### WAF 绕过机制
+
 - 使用 Playwright 自动化浏览器
 - 访问登录页面获取 WAF cookies（如 acw_tc）
 - 将 WAF cookies 与用户 cookies 合并后发起请求
 
 ### 通知策略
+
 - 仅在签到失败或余额变化时发送通知
 - 使用 SHA256 hash 跟踪余额变化
 - 支持多种通知渠道并发推送
@@ -452,11 +496,13 @@ scripts\run_checkin.bat manual
 ### 查看运行日志
 
 **本地运行：**
+
 ```
 Win + R → taskschd.msc → 找到"AnyRouter自动签到" → 查看历史记录
 ```
 
 **GitHub Actions：**
+
 ```
 仓库 → Actions 标签 → 点击最近的运行记录
 ```
@@ -464,11 +510,13 @@ Win + R → taskschd.msc → 找到"AnyRouter自动签到" → 查看历史记�
 ### 取消定时任务
 
 **本地运行：**
+
 ```
 Win + R → taskschd.msc → 右键"AnyRouter自动签到" → 删除
 ```
 
 **GitHub Actions：**
+
 ```
 仓库 → Actions → 选择 workflow → Disable workflow
 ```
@@ -492,7 +540,19 @@ uv run ruff check .
 
 ## 更新日志
 
+### v2.3.0 (2025-12-20)
+
+- 🧹 **项目结构优化**
+  - 运行时数据统一存放到 `data/` 目录（balance_hash.txt、signin_history.json、task_run.log）
+  - 移除冗余的单文件目录（config/、docs/）
+  - `.env.template` 和 `SECURITY_CHECKLIST.md` 移至根目录
+  - 简化 `.gitignore`，整个 `data/` 目录被忽略
+- 🔧 **代码清理**
+  - 删除所有缓存目录（.pytest_cache、.ruff_cache、__pycache__）
+  - 更新 `constants.py` 中的文件路径常量
+
 ### v2.2.0 (2025-12-18)
+
 - 🔧 **修复定时任务执行问题**
   - 使用 uv 完整路径，解决系统环境变量找不到命令的问题
   - 启用批处理延迟变量扩展，正确处理错误码
@@ -511,6 +571,7 @@ uv run ruff check .
   - 改进错误处理和异常捕获
 
 ### v2.1.0 (2025-12-16)
+
 - 🎨 重组项目文件结构，提升可维护性
   - 配置文件移至 `config/` 目录
   - 脚本文件移至 `scripts/` 目录
@@ -520,6 +581,7 @@ uv run ruff check .
 - 📝 优化 README 文档，添加快速使用指南
 
 ### v2.0.0 (2025-12-16)
+
 - ✨ 新增本地运行支持
 - ✨ 全面汉化界面
 - 🐛 修复 JSON 多行解析问题
@@ -529,6 +591,7 @@ uv run ruff check .
 - 🔧 新增 Windows 定时任务自动配置脚本
 
 ### v1.0.0
+
 - 🎉 初始版本
 - ✅ GitHub Actions 支持
 - ✅ 多账号签到
@@ -552,7 +615,7 @@ MIT License
 
 ```bash
 # 复制配置文件
-copy config\.env.template .env
+copy .env.template .env
 
 # 手动运行签到
 uv run checkin.py

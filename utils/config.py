@@ -6,7 +6,11 @@
 import json
 import os
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Dict, List, Literal
+
+# Provider 配置文件路径
+PROVIDERS_FILE = Path(__file__).parent.parent / 'providers.json'
 
 
 @dataclass
@@ -75,14 +79,42 @@ class AppConfig:
 	providers: Dict[str, ProviderConfig]
 
 	@classmethod
-	def load_from_env(cls) -> 'AppConfig':
-		"""从环境变量加载配置"""
-		providers = {
+	def _load_providers_from_file(cls) -> Dict[str, ProviderConfig] | None:
+		"""从 providers.json 文件加载配置"""
+		if not PROVIDERS_FILE.exists():
+			return None
+
+		try:
+			with open(PROVIDERS_FILE, 'r', encoding='utf-8') as f:
+				providers_data = json.load(f)
+
+			if not isinstance(providers_data, dict):
+				print('[警告] providers.json 必须是 JSON 对象')
+				return None
+
+			providers = {}
+			for name, provider_data in providers_data.items():
+				try:
+					providers[name] = ProviderConfig.from_dict(name, provider_data)
+				except Exception as e:
+					print(f'[警告] 解析 provider "{name}" 失败: {e}')
+
+			print(f'[信息] 从 providers.json 加载了 {len(providers)} 个 provider')
+			return providers
+
+		except Exception as e:
+			print(f'[警告] 读取 providers.json 失败: {e}')
+			return None
+
+	@classmethod
+	def _get_default_providers(cls) -> Dict[str, ProviderConfig]:
+		"""获取默认 provider 配置（硬编码后备）"""
+		return {
 			'anyrouter': ProviderConfig(
 				name='anyrouter',
 				domain='https://anyrouter.top',
 				login_path='/login',
-				sign_in_path='/api/user/sign_in',  # anyrouter需要调用签到接口
+				sign_in_path='/api/user/sign_in',
 				user_info_path='/api/user/self',
 				api_user_key='new-api-user',
 				bypass_method='waf_cookies',
@@ -92,7 +124,7 @@ class AppConfig:
 				name='agentrouter',
 				domain='https://agentrouter.org',
 				login_path='/login',
-				sign_in_path=None,  # agentrouter无需签到接口，登录时自动完成签到
+				sign_in_path=None,
 				user_info_path='/api/user/self',
 				api_user_key='new-api-user',
 				bypass_method='waf_cookies',
@@ -100,7 +132,24 @@ class AppConfig:
 			),
 		}
 
-		# 尝试从环境变量加载自定义 providers
+	@classmethod
+	def load_from_env(cls) -> 'AppConfig':
+		"""从配置文件/环境变量加载配置
+
+		优先级：
+		1. providers.json 文件
+		2. PROVIDERS 环境变量（JSON 格式，覆盖/扩展）
+		3. 硬编码默认值（后备）
+		"""
+		# 1. 尝试从文件加载
+		providers = cls._load_providers_from_file()
+
+		# 2. 如果文件不存在，使用默认值
+		if providers is None:
+			providers = cls._get_default_providers()
+			print('[信息] 使用默认 provider 配置')
+
+		# 3. 从环境变量加载自定义 providers（覆盖/扩展）
 		providers_str = os.getenv('PROVIDERS')
 		if providers_str:
 			try:
@@ -110,21 +159,17 @@ class AppConfig:
 					print('[警告] PROVIDERS 必须是 JSON 对象，忽略自定义 providers')
 					return cls(providers=providers)
 
-				# 解析自定义 providers,会覆盖默认配置
 				for name, provider_data in providers_data.items():
 					try:
 						providers[name] = ProviderConfig.from_dict(name, provider_data)
 					except Exception as e:
-						print(f'[警告] 解析 provider "{name}" 失败: {e}，跳过')
-						continue
+						print(f'[警告] 解析 provider "{name}" 失败: {e}')
 
 				print(f'[信息] 从 PROVIDERS 环境变量加载了 {len(providers_data)} 个自定义 provider')
 			except json.JSONDecodeError as e:
-				print(
-					f'[警告] 解析 PROVIDERS 环境变量失败: {e}，仅使用默认配置'
-				)
+				print(f'[警告] 解析 PROVIDERS 环境变量失败: {e}')
 			except Exception as e:
-				print(f'[警告] 加载 PROVIDERS 时出错: {e}，仅使用默认配置')
+				print(f'[警告] 加载 PROVIDERS 时出错: {e}')
 
 		return cls(providers=providers)
 
