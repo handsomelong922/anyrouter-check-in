@@ -16,7 +16,7 @@ from typing import List
 from utils.constants import DATA_DIR, DATABASE_FILE
 
 # 数据库 Schema 版本
-SCHEMA_VERSION = 1
+SCHEMA_VERSION = 2
 
 # 建表 SQL
 SCHEMA_SQL = """
@@ -29,7 +29,7 @@ CREATE TABLE IF NOT EXISTS providers (
     sign_in_path TEXT,
     user_info_path TEXT DEFAULT '/api/user/self',
     api_user_key TEXT DEFAULT 'new-api-user',
-    bypass_method TEXT,
+    signin_method TEXT DEFAULT 'browser_waf',
     waf_cookie_names TEXT,
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
@@ -91,7 +91,7 @@ class ProviderRow:
 	sign_in_path: str | None
 	user_info_path: str
 	api_user_key: str
-	bypass_method: str | None
+	signin_method: str
 	waf_cookie_names: List[str] | None
 
 
@@ -206,7 +206,7 @@ class Database:
 		sign_in_path: str | None = '/api/user/sign_in',
 		user_info_path: str = '/api/user/self',
 		api_user_key: str = 'new-api-user',
-		bypass_method: str | None = None,
+		signin_method: str = 'browser_waf',
 		waf_cookie_names: List[str] | None = None
 	) -> int:
 		"""创建或更新 Provider"""
@@ -215,7 +215,7 @@ class Database:
 
 		cursor = conn.execute('''
 			INSERT INTO providers (name, domain, login_path, sign_in_path, user_info_path,
-			                       api_user_key, bypass_method, waf_cookie_names)
+			                       api_user_key, signin_method, waf_cookie_names)
 			VALUES (?, ?, ?, ?, ?, ?, ?, ?)
 			ON CONFLICT(name) DO UPDATE SET
 				domain = excluded.domain,
@@ -223,11 +223,11 @@ class Database:
 				sign_in_path = excluded.sign_in_path,
 				user_info_path = excluded.user_info_path,
 				api_user_key = excluded.api_user_key,
-				bypass_method = excluded.bypass_method,
+				signin_method = excluded.signin_method,
 				waf_cookie_names = excluded.waf_cookie_names,
 				updated_at = CURRENT_TIMESTAMP
 		''', (name, domain, login_path, sign_in_path, user_info_path,
-		      api_user_key, bypass_method, waf_names_json))
+		      api_user_key, signin_method, waf_names_json))
 		conn.commit()
 		return cursor.lastrowid or self.get_provider_by_name(name).id
 
@@ -248,7 +248,7 @@ class Database:
 			sign_in_path=row['sign_in_path'],
 			user_info_path=row['user_info_path'],
 			api_user_key=row['api_user_key'],
-			bypass_method=row['bypass_method'],
+			signin_method=row['signin_method'] if 'signin_method' in row.keys() else 'browser_waf',
 			waf_cookie_names=waf_names
 		)
 
@@ -448,7 +448,10 @@ class Database:
 		cursor = conn.execute('''
 			SELECT * FROM signin_records
 			WHERE id IN (
-				SELECT MAX(id) FROM signin_records GROUP BY account_id
+				-- 只取“会影响冷却期”的记录，避免被 skipped/error/failed 这类运行记录污染
+				SELECT MAX(id) FROM signin_records
+				WHERE status IN ('success', 'cooldown', 'first_run')
+				GROUP BY account_id
 			)
 		''')
 		return {row['account_id']: self._row_to_signin_record(row) for row in cursor.fetchall()}
@@ -492,7 +495,7 @@ def migrate_providers_from_json(db: Database, providers_file: str) -> int:
 				sign_in_path=data.get('sign_in_path', '/api/user/sign_in'),
 				user_info_path=data.get('user_info_path', '/api/user/self'),
 				api_user_key=data.get('api_user_key', 'new-api-user'),
-				bypass_method=data.get('bypass_method'),
+				signin_method=data.get('signin_method', 'browser_waf'),
 				waf_cookie_names=data.get('waf_cookie_names')
 			)
 			count += 1
@@ -605,6 +608,47 @@ def migrate_signin_history_from_json(db: Database, history_file: str) -> int:
 		return 0
 
 
+def _migrate_v1_to_v2(db: Database, providers_file: str) -> None:
+	"""从 schema v1 迁移到 v2
+
+	主要变更：bypass_method → signin_method
+	"""
+	print('[迁移] 执行 schema v1 → v2 迁移...')
+	conn = db.connect()
+
+	# 检查 providers 表的列结构
+	cursor = conn.execute('PRAGMA table_info(providers)')
+	columns = {row['name'] for row in cursor.fetchall()}
+
+	# 如果有 bypass_method 列但没有 signin_method 列，添加新列
+	if 'signin_method' not in columns:
+		print('[迁移] 添加 signin_method 列...')
+		conn.execute('ALTER TABLE providers ADD COLUMN signin_method TEXT DEFAULT "browser_waf"')
+
+		# 如果旧列存在，复制数据
+		if 'bypass_method' in columns:
+			print('[迁移] 从 bypass_method 迁移数据...')
+			conn.execute('''
+				UPDATE providers SET signin_method = CASE
+					WHEN bypass_method = 'http_login' THEN 'http_login'
+					ELSE 'browser_waf'
+				END
+			''')
+		conn.commit()
+
+	# 重新导入 providers.json 来更新 signin_method 值
+	print('[迁移] 从 providers.json 更新 provider 配置...')
+	migrate_providers_from_json(db, providers_file)
+
+	# 更新 schema 版本
+	conn.execute(
+		'INSERT OR REPLACE INTO metadata (key, value) VALUES (?, ?)',
+		('schema_version', str(SCHEMA_VERSION))
+	)
+	conn.commit()
+	print('[迁移] schema v1 → v2 迁移完成')
+
+
 def init_database(
 	db_path: str = DATABASE_FILE,
 	providers_file: str = 'providers.json',
@@ -642,6 +686,12 @@ def init_database(
 			print(f'[迁移] 从 signin_history.json 导入了 {history_count} 条签到记录')
 
 		print('[数据库] 初始化完成')
+	elif version < SCHEMA_VERSION:
+		# Schema 升级
+		print(f'[数据库] 检测到旧版本 schema (v{version})，需要升级...')
+		if version == 1:
+			_migrate_v1_to_v2(db, providers_file)
+		print(f'[数据库] 已升级到 schema v{SCHEMA_VERSION}')
 	else:
 		print(f'[数据库] 使用现有数据库 (schema v{version})')
 

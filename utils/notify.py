@@ -84,7 +84,7 @@ class NotificationKit:
 
 		mime_subtype = 'plain' if msg_type == 'text' else 'html'
 		msg = MIMEText(content, mime_subtype, 'utf-8')
-		msg['From'] = f'AnyRouter Assistant <{self.email_user}>'
+		msg['From'] = f'公益站签到助手 <{self.email_user}>'
 		msg['To'] = self.email_to
 		msg['Subject'] = title
 

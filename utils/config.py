@@ -15,64 +15,50 @@ from typing import Dict, List, Literal
 # Provider 配置文件路径
 PROVIDERS_FILE = Path(__file__).parent.parent / 'providers.json'
 
+# 是否禁用数据库：用于 GitHub Actions（更安全、更确定），本地默认不禁用
+_DISABLE_DATABASE = os.getenv('DISABLE_DATABASE', '').strip().lower() in ('1', 'true', 'yes', 'on')
+_DISABLE_DATABASE = _DISABLE_DATABASE or os.getenv('GITHUB_ACTIONS', '').strip().lower() == 'true'
+
 
 @dataclass
 class ProviderConfig:
-	"""Provider 配置"""
+	"""Provider 配置
+
+	signin_method 定义了签到策略：
+	- browser_waf: 需要浏览器获取WAF cookies后调用签到API（如 AnyRouter）
+	- http_login: 纯HTTP访问登录页触发签到（如 AgentRouter）
+	"""
 
 	name: str
 	domain: str
+	signin_method: Literal['browser_waf', 'http_login']
 	login_path: str = '/login'
 	sign_in_path: str | None = '/api/user/sign_in'
 	user_info_path: str = '/api/user/self'
 	api_user_key: str = 'new-api-user'
-	bypass_method: Literal['waf_cookies'] | None = None
 	waf_cookie_names: List[str] | None = None
 
 	def __post_init__(self):
-		required_waf_cookies = set()
-		if self.waf_cookie_names and isinstance(self.waf_cookie_names, List):
-			for item in self.waf_cookie_names:
-				name = "" if not item or not isinstance(item, str) else item.strip()
-				if not name:
-					print(f'[警告] 发现无效的 WAF cookie 名称: {item}')
-					continue
-
-				required_waf_cookies.add(name)
-
-		if not required_waf_cookies:
-			self.bypass_method = None
-
-		self.waf_cookie_names = list(required_waf_cookies)
+		# 清理 waf_cookie_names
+		if self.waf_cookie_names:
+			cleaned = [n.strip() for n in self.waf_cookie_names if n and isinstance(n, str) and n.strip()]
+			self.waf_cookie_names = cleaned if cleaned else []
+		else:
+			self.waf_cookie_names = []
 
 	@classmethod
 	def from_dict(cls, name: str, data: dict) -> 'ProviderConfig':
-		"""从字典创建 ProviderConfig
-
-		配置格式:
-		- 基础: {"domain": "https://example.com"}
-		- 完整: {"domain": "https://example.com", "login_path": "/login", "api_user_key": "x-api-user", "bypass_method": "waf_cookies", ...}
-		"""
+		"""从字典创建 ProviderConfig"""
 		return cls(
 			name=name,
 			domain=data['domain'],
+			signin_method=data.get('signin_method', 'browser_waf'),
 			login_path=data.get('login_path', '/login'),
 			sign_in_path=data.get('sign_in_path', '/api/user/sign_in'),
 			user_info_path=data.get('user_info_path', '/api/user/self'),
 			api_user_key=data.get('api_user_key', 'new-api-user'),
-			bypass_method=data.get('bypass_method'),
-			waf_cookie_names = data.get('waf_cookie_names'),
+			waf_cookie_names=data.get('waf_cookie_names'),
 		)
-
-	def needs_waf_cookies(self) -> bool:
-		"""判断是否需要获取 WAF cookies"""
-		return self.bypass_method == 'waf_cookies'
-
-	def needs_manual_check_in(self) -> bool:
-		"""判断是否需要手动调用签到接口"""
-		# 只有当sign_in_path不为None时才需要手动签到
-		# agentrouter的sign_in_path为None，查询用户信息时自动完成签到
-		return self.sign_in_path is not None
 
 
 @dataclass
@@ -116,22 +102,22 @@ class AppConfig:
 			'anyrouter': ProviderConfig(
 				name='anyrouter',
 				domain='https://anyrouter.top',
+				signin_method='browser_waf',
 				login_path='/login',
 				sign_in_path='/api/user/sign_in',
 				user_info_path='/api/user/self',
 				api_user_key='new-api-user',
-				bypass_method='waf_cookies',
 				waf_cookie_names=['acw_tc', 'cdn_sec_tc', 'acw_sc__v2'],
 			),
 			'agentrouter': ProviderConfig(
 				name='agentrouter',
 				domain='https://agentrouter.org',
+				signin_method='http_login',
 				login_path='/login',
 				sign_in_path=None,
 				user_info_path='/api/user/self',
 				api_user_key='new-api-user',
-				bypass_method='waf_cookies',
-				waf_cookie_names=['acw_tc'],
+				waf_cookie_names=[],
 			),
 		}
 
@@ -312,11 +298,11 @@ def load_providers_from_db() -> Dict[str, ProviderConfig] | None:
 			result[p.name] = ProviderConfig(
 				name=p.name,
 				domain=p.domain,
+				signin_method=getattr(p, 'signin_method', 'browser_waf'),
 				login_path=p.login_path,
 				sign_in_path=p.sign_in_path,
 				user_info_path=p.user_info_path,
 				api_user_key=p.api_user_key,
-				bypass_method=p.bypass_method,
 				waf_cookie_names=p.waf_cookie_names
 			)
 
@@ -365,6 +351,13 @@ def load_accounts_config_with_db() -> list[AccountConfig] | None:
 	Returns:
 	    账号配置列表
 	"""
+	# CI/Actions 默认禁用数据库（避免敏感 cookie 落库 & 避免旧 DB 覆盖 Secrets）
+	if _DISABLE_DATABASE:
+		accounts = load_accounts_config()
+		if accounts:
+			print(f'[信息] 数据库已禁用，从环境变量加载了 {len(accounts)} 个账号')
+		return accounts
+
 	# 优先从数据库加载
 	accounts = load_accounts_from_db()
 	if accounts:

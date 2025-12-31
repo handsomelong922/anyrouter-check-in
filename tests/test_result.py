@@ -1,17 +1,14 @@
 #!/usr/bin/env python3
 """签到结果模块测试"""
 
-import json
 import os
-import tempfile
-from datetime import datetime, timedelta
-from pathlib import Path
-from unittest.mock import patch
-
-import pytest
 
 # 添加项目根目录到 PATH
 import sys
+import tempfile
+from datetime import datetime, timedelta
+from pathlib import Path
+
 project_root = Path(__file__).parent.parent
 sys.path.insert(0, str(project_root))
 
@@ -27,8 +24,6 @@ from utils.result import (
 	generate_balance_hash,
 	get_next_signin_time,
 	is_in_cooldown,
-	load_signin_history,
-	save_signin_history,
 	update_signin_history,
 )
 
@@ -204,16 +199,23 @@ class TestBalanceChange:
 		assert diff == 0.0
 
 	def test_balance_unchanged_not_in_cooldown(self):
-		"""测试非冷却期余额未变"""
+		"""测试非冷却期余额未变
+
+		注意：新逻辑下，余额不变返回 COOLDOWN，因为签到 API 可能已成功
+		"""
 		old_time = datetime.now() - timedelta(hours=25)
 		status, diff = analyze_balance_change(10.0, 10.0, old_time)
-		assert status == SigninStatus.FAILED
+		assert status == SigninStatus.COOLDOWN  # 余额不变 = 今日已签到
 		assert diff == 0.0
 
 	def test_balance_decrease(self):
-		"""测试余额减少"""
+		"""测试余额减少
+
+		注意：新逻辑下，余额减少返回 COOLDOWN，因为签到 API 可能已成功
+		余额减少可能是正常使用消耗，而非签到失败
+		"""
 		status, diff = analyze_balance_change(9.0, 10.0, None)
-		assert status == SigninStatus.FAILED
+		assert status == SigninStatus.COOLDOWN  # 余额减少 = 正常消耗，签到可能成功
 		assert diff == -1.0
 
 

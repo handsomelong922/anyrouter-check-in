@@ -5,7 +5,7 @@
     "sign_in_path": "/api/user/sign_in",
     "user_info_path": "/api/user/self",
     "api_user_key": "new-api-user",
-    "bypass_method": "waf_cookies",
+    "signin_method": "browser_waf",
     "waf_cookie_names": ["acw_tc", "cdn_sec_tc", "acw_sc__v2"]
   },
   "agentrouter": {
@@ -14,7 +14,7 @@
     "sign_in_path": null,
     "user_info_path": "/api/user/self",
     "api_user_key": "new-api-user",
-    "bypass_method": "waf_cookies",
+    "signin_method": "http_login",
     "waf_cookie_names": ["acw_tc"]
   }
 }

@@ -1,4 +1,4 @@
-# AnyRouter 多账号自动签到
+# 公益站 多账号自动签到
 
 多平台多账号自动签到工具，支持所有基于 NewAPI、OneAPI 的平台。内置支持 AnyRouter 与 AgentRouter，其他平台可根据文档自定义配置。
 
@@ -11,6 +11,31 @@
 ---
 
 ## 更新日志
+
+### v2.6.0 (2025-12-31)
+
+- 📝 **GitHub Actions 运行说明**
+  - 两个平台都优先使用 HTTP 方式签到（无需浏览器）
+  - 只要 session cookie 有效，Actions 环境下 AnyRouter 和 AgentRouter 均可正常签到
+  - 仅当 HTTP 签到失败时才回退到浏览器（AnyRouter: WAF 绕过；AgentRouter: OAuth 登录）
+  - **注意**：浏览器回退在 Actions 中不可用，请确保 session cookie 有效
+- 🧹 **仓库清理**
+  - 删除重复的 `.env.template`（保留简洁版 `env.template`）
+  - 删除调试文档和 Chrome 调试脚本（仅供开发用）
+  - 精简项目结构，减少用户困惑
+
+### v2.5.1 (2025-12-27)
+
+- 🧹 **仓库清理**
+  - 删除调试截图、缓存目录、重复 workflow 文件
+  - 调试截图统一写入 `data/debug_screenshots/`（避免污染仓库根目录）
+- 🪟 **Windows 脚本恢复**
+  - 恢复 `scripts/run_checkin.bat`、`scripts/run_checkin_manual.bat`
+  - 恢复 `scripts/setup_task.bat`、`scripts/setup_task.ps1`
+- 🌐 **原生 Chrome 复用（CDP）**
+  - 默认端口以 9222 为主，并自动探测 9222/9022
+  - `scripts/start_chrome_debug.bat` 支持选择本机 Chrome Profile
+  - 新增 `scripts/start_chrome_debug_mcp_profile.bat`（复用 chrome-devtools-mcp profile）
 
 ### v2.5.0 (2025-12-22)
 
@@ -53,7 +78,7 @@
 - 🧹 **项目结构优化**
   - 运行时数据统一存放到 `data/` 目录（balance_hash.txt、signin_history.json、task_run.log）
   - 移除冗余的单文件目录（config/、docs/）
-  - `.env.template` 和 `SECURITY_CHECKLIST.md` 移至根目录
+  - 提供 `env.template` 配置模板（复制为 `.env`）
   - 简化 `.gitignore`，整个 `data/` 目录被忽略
 - 🔧 **代码清理**
   - 删除所有缓存目录（.pytest_cache、.ruff_cache、__pycache__）
@@ -114,13 +139,12 @@ anyrouter-check-in/
 ├── checkin.py                主程序
 ├── providers.json            Provider 配置
 ├── pyproject.toml            项目依赖
-├── .env.template             配置模板
-├── SECURITY_CHECKLIST.md     安全检查清单
-├── .claude/                  Claude Code 配置
-│   └── CLAUDE.md             AI 助手指令（含 commit 前检查）
+├── env.template              配置模板（复制为 .env）
 ├── scripts/                  脚本文件夹
-│   ├── run_checkin.bat       运行脚本
-│   └── setup_task.bat        一键设置定时任务
+│   ├── run_checkin.bat           运行脚本（定时任务用）
+│   ├── run_checkin_manual.bat    手动运行（不闪退）
+│   ├── setup_task.bat            一键设置定时任务
+│   └── setup_task.ps1            定时任务创建逻辑
 ├── tests/                    测试文件夹
 │   ├── test_browser.py       浏览器模块测试
 │   ├── test_config.py        配置验证
@@ -134,22 +158,27 @@ anyrouter-check-in/
 │   └── result.py             签到结果管理
 └── data/                     运行时数据（自动生成，已忽略）
     ├── balance_hash.txt      余额哈希
+    ├── checkin.db            SQLite 数据库（本地）
     ├── signin_history.json   签到历史
     └── task_run.log          运行日志
 ```
 
 ---
 
-## 🚀 快速使用（3步）
+## 🚀 快速使用（4步）
 
 ```bash
-# 1. 复制配置模板
-copy .env.template .env
+# 1. 安装依赖
+uv sync --dev
 
-# 2. 编辑 .env 填入你的账号信息
+# 2. 复制配置模板并编辑（敏感文件不要上传）
+copy env.template .env
 notepad .env
 
-# 3. 右键"以管理员身份运行"设置定时任务
+# 3. 手动运行测试（不会闪退）
+scripts\run_checkin_manual.bat
+
+# 4. 右键“以管理员身份运行”设置定时任务
 scripts\setup_task.bat
 ```
 
@@ -194,7 +223,7 @@ uv sync --dev
 uv run playwright install chromium
 
 # 4. 配置账号
-copy .env.template .env
+copy env.template .env
 notepad .env
 
 # 5. 测试运行
@@ -241,7 +270,7 @@ scripts\setup_task.bat
 
 1. 点击仓库的 `Actions` 标签
 2. 如果提示启用，点击 `Enable workflow`
-3. 找到 "AnyRouter 自动签到" workflow
+3. 找到 "公益站 自动签到" workflow
 4. 点击 `Run workflow` 进行首次测试
 
 ---
@@ -446,7 +475,7 @@ CUSTOM_SMTP_SERVER=smtp.gmail.com:587
 **检查步骤**：
 
 1. 按 `Win + R`，输入 `taskschd.msc` 打开任务计划程序
-2. 找到"AnyRouter自动签到"任务
+2. 找到"公益站自动签到"任务
 3. 查看"上次运行结果"和"下次运行时间"
 4. 右键任务 → 运行，测试是否正常
 5. 查看日志文件：`anyrouter-check-in\data\task_run.log`
@@ -560,7 +589,7 @@ scripts\run_checkin.bat manual
 **本地运行：**
 
 ```
-Win + R → taskschd.msc → 找到"AnyRouter自动签到" → 查看历史记录
+Win + R → taskschd.msc → 找到"公益站自动签到" → 查看历史记录
 ```
 
 **GitHub Actions：**
@@ -574,7 +603,7 @@ Win + R → taskschd.msc → 找到"AnyRouter自动签到" → 查看历史记�
 **本地运行：**
 
 ```
-Win + R → taskschd.msc → 右键"AnyRouter自动签到" → 删除
+Win + R → taskschd.msc → 右键"公益站自动签到" → 删除
 ```
 
 **GitHub Actions：**
@@ -616,7 +645,7 @@ MIT License
 
 ```bash
 # 复制配置文件
-copy .env.template .env
+copy env.template .env
 
 # 手动运行签到
 uv run checkin.py

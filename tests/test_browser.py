@@ -1,14 +1,13 @@
 #!/usr/bin/env python3
 """浏览器模块测试"""
 
-import asyncio
+# 添加项目根目录到 PATH
+import sys
 from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-# 添加项目根目录到 PATH
-import sys
 project_root = Path(__file__).parent.parent
 sys.path.insert(0, str(project_root))
 

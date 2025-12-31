@@ -4,6 +4,7 @@
 # Claude Code 配置（保留项目指令，忽略敏感设置）
 .claude/*
 !.claude/CLAUDE.md
+CLAUDE.md
 
 # Python 运行时
 .venv/

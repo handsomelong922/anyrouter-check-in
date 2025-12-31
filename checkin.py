@@ -1,16 +1,19 @@
 #!/usr/bin/env python3
-"""AnyRouter.top 自动签到脚本
+"""公益站（AnyRouter/AgentRouter）自动签到脚本
 
-重构版本：
+支持的签到策略：
+- browser_waf: 浏览器获取 WAF cookies + 调用签到 API（AnyRouter）
+- http_login: HTTP 访问登录页触发自动签到（AgentRouter）
+
+特性：
 - 使用常量替代魔法数字
-- 函数职责单一，不超过 50 行
-- 状态管理无副作用
-- 统一错误处理
+- 函数职责单一
 - 统一异步模型（httpx.AsyncClient）
 - HTTP 重试机制（tenacity）
 """
 
 import asyncio
+import os
 import sys
 from datetime import datetime
 
@@ -26,7 +29,6 @@ from tenacity import (
 from utils.browser import (
 	clear_waf_cookie_cache,
 	get_cached_waf_cookies,
-	get_waf_cookies_and_trigger_signin,
 	perform_oauth_signin_with_chrome,
 	perform_real_login_signin,
 	trigger_signin_via_http,
@@ -35,6 +37,7 @@ from utils.browser import (
 from utils.config import AccountConfig, AppConfig, ProviderConfig, load_accounts_config_with_db
 from utils.constants import (
 	CHROME_USER_AGENT,
+	DATA_DIR,
 	HTTP_TIMEOUT_SECONDS,
 	LOG_FILE,
 	MAX_CONCURRENT_ACCOUNTS,
@@ -46,7 +49,6 @@ from utils.result import (
 	SigninStatus,
 	SigninSummary,
 	UserBalance,
-	analyze_balance_change,
 	format_time_remaining,
 	generate_balance_hash,
 	get_next_signin_time,
@@ -59,14 +61,35 @@ from utils.result import (
 	update_signin_history,
 )
 
+# 尝试强制 UTF-8 输出（尽量减少 Windows 终端中文乱码）
+try:
+	if hasattr(sys.stdout, 'reconfigure'):
+		sys.stdout.reconfigure(encoding='utf-8', errors='replace')
+	if hasattr(sys.stderr, 'reconfigure'):
+		sys.stderr.reconfigure(encoding='utf-8', errors='replace')
+except Exception:
+	pass
+
 # 先加载环境变量，再导入 notify 模块
 load_dotenv()
 from utils.notify import notify
 
+# ============ 运行模式/环境开关 ============
+# CI/Actions 默认禁用数据库：避免敏感 cookie 落库 & 避免旧 DB 覆盖 Secrets
+DISABLE_DATABASE = os.getenv('DISABLE_DATABASE', '').strip().lower() in ('1', 'true', 'yes', 'on')
+DISABLE_DATABASE = DISABLE_DATABASE or os.getenv('GITHUB_ACTIONS', '').strip().lower() == 'true'
+
+# 确保 data/ 目录存在（日志/历史文件会用到）
+try:
+	os.makedirs(DATA_DIR, exist_ok=True)
+except Exception:
+	# 不阻塞主流程，后续写文件会再报错提示
+	pass
+
 # 尝试导入数据库模块（可选依赖）
 try:
 	from utils.database import close_database, init_database
-	HAS_DATABASE = True
+	HAS_DATABASE = not DISABLE_DATABASE
 except ImportError:
 	HAS_DATABASE = False
 
@@ -97,9 +120,9 @@ class Logger:
 
 def setup_logging() -> None:
 	"""设置日志输出"""
-	if '--manual' not in sys.argv:
-		sys.stdout = Logger(LOG_FILE)
-		sys.stderr = sys.stdout
+	# 无论是否 --manual 都写入 task_run.log（用户希望任何运行方式都有日志）
+	sys.stdout = Logger(LOG_FILE)
+	sys.stderr = sys.stdout
 
 
 # ============ Cookie 处理 ============
@@ -226,61 +249,33 @@ async def execute_manual_signin(
 # ============ 签到核心逻辑 ============
 
 
-async def prepare_cookies_with_waf(
+async def get_waf_cookies_for_browser_waf(
 	account_name: str,
 	provider: ProviderConfig,
-	user_cookies: dict[str, str],
-	api_user: str
+	user_cookies: dict[str, str]
 ) -> dict[str, str] | None:
-	"""准备请求所需的 cookies（包含 WAF cookies）
+	"""为 browser_waf 模式获取 WAF cookies（带缓存）
 
-	优化策略：
-	- 对于手动签到的 provider（通过 API 签到），使用缓存的 WAF cookies
-	- 对于自动签到的 provider（访问首页触发），每次都启动浏览器
+	browser_waf 模式使用缓存的 WAF cookies，因为多个账号可以共享同一域名的 WAF cookies。
 	"""
-	if not provider.needs_waf_cookies():
-		print(f'[信息] {account_name}: 无需绕过 WAF，直接使用用户 cookies')
+	if not provider.waf_cookie_names:
+		print(f'[信息] {account_name}: 无需 WAF cookies')
 		return user_cookies
-
-	# 获取用户 session
-	user_session = user_cookies.get('session', '')
-	if not user_session:
-		print(f'[失败] {account_name}: cookies 中未找到 session')
-		return None
 
 	login_url = f'{provider.domain}{provider.login_path}'
 
-	# 如果是手动签到（通过 API），可以使用缓存的 WAF cookies
-	if provider.needs_manual_check_in():
-		waf_cookies = await get_cached_waf_cookies(
-			domain=provider.domain,
-			login_url=login_url,
-			required_cookies=provider.waf_cookie_names or [],
-			log_fn=print
-		)
-		if waf_cookies:
-			return {**waf_cookies, **user_cookies}
-		print(f'[失败] {account_name}: 无法获取 WAF cookies')
-		return None
-
-	# 自动签到需要每个账号都启动浏览器访问首页
-	result = await get_waf_cookies_and_trigger_signin(
-		account_name=account_name,
+	waf_cookies = await get_cached_waf_cookies(
 		domain=provider.domain,
 		login_url=login_url,
-		required_cookies=provider.waf_cookie_names or [],
-		user_session=user_session,
-		api_user=api_user,
-		api_user_key=provider.api_user_key,
+		required_cookies=provider.waf_cookie_names,
 		log_fn=print
 	)
 
-	if not result.success:
-		print(f'[失败] {account_name}: 无法获取 WAF cookies - {result.error}')
-		return None
+	if waf_cookies:
+		return {**waf_cookies, **user_cookies}
 
-	# 合并 WAF cookies 和用户 cookies
-	return {**result.waf_cookies, **user_cookies}
+	print(f'[失败] {account_name}: 无法获取 WAF cookies')
+	return None
 
 
 def create_signin_result(
@@ -290,9 +285,26 @@ def create_signin_result(
 	last_balance: float | None,
 	last_signin: datetime | None,
 	user_info: UserBalance | None,
-	api_success: bool = True
+	api_success: bool = True,
+	api_returned_success: bool = False,
+	# 本次触发前/后余额（用于“本次是否拿到奖励”的准确判定）
+	balance_before_run: float | None = None,
+	balance_after_run: float | None = None,
 ) -> SigninResult:
-	"""创建签到结果（无副作用）"""
+	"""创建签到结果（无副作用）
+
+	Args:
+		account_key: 账号唯一标识
+		account_name: 账号显示名称
+		current_balance: 当前余额
+		last_balance: 上次记录余额
+		last_signin: 上次签到时间
+		user_info: 用户信息
+		api_success: API 请求是否成功（网络层面）
+		api_returned_success: 签到 API 返回的 success 字段是否为 True
+		balance_before_run: 本次触发前余额（美元）
+		balance_after_run: 本次触发后余额（美元）
+	"""
 	if not api_success:
 		return SigninResult(
 			account_key=account_key,
@@ -303,7 +315,10 @@ def create_signin_result(
 			last_signin=last_signin
 		)
 
-	if current_balance is None:
+	# 统一使用“本次触发后余额”作为最终余额（如果没提供则回退 current_balance）
+	final_balance = balance_after_run if balance_after_run is not None else current_balance
+
+	if final_balance is None:
 		return SigninResult(
 			account_key=account_key,
 			account_name=account_name,
@@ -313,20 +328,31 @@ def create_signin_result(
 			last_signin=last_signin
 		)
 
-	# 分析余额变化
-	status, diff = analyze_balance_change(current_balance, last_balance, last_signin)
+	# 关键：优先用“本次触发前/后”判断是否拿到奖励，避免用历史余额误报“本次成功”
+	before_balance = balance_before_run if balance_before_run is not None else last_balance
+	after_balance = final_balance
+
+	if before_balance is None:
+		# 首次运行/无历史：不强行判定成功与否，记录当前余额即可
+		status = SigninStatus.FIRST_RUN
+		diff = None
+	else:
+		diff = round(after_balance - before_balance, 2)
+		status = SigninStatus.SUCCESS if diff > 0 else SigninStatus.COOLDOWN
 
 	# 创建新的签到记录
 	new_record = None
-	if status in (SigninStatus.SUCCESS, SigninStatus.FIRST_RUN):
-		new_record = SigninRecord(time=datetime.now(), balance=current_balance)
+	# 只要我们确认“本次触发流程已完成”（api_returned_success=True），就更新记录，
+	# 以避免历史余额长期不更新导致误报（同时也能正确控制冷却期跳过）。
+	if api_returned_success:
+		new_record = SigninRecord(time=datetime.now(), balance=after_balance)
 
 	return SigninResult(
 		account_key=account_key,
 		account_name=account_name,
 		status=status,
-		balance_before=last_balance,
-		balance_after=current_balance,
+		balance_before=before_balance,
+		balance_after=after_balance,
 		balance_diff=diff,
 		user_info=user_info,
 		new_record=new_record,
@@ -392,16 +418,19 @@ async def process_single_account(
 			error='cookies 格式无效'
 		)
 
-	# 判断签到方式
-	needs_oauth_login = not provider.needs_manual_check_in() and account.has_oauth_config()
-	needs_real_login = not provider.needs_manual_check_in() and account.has_login_credentials()
-	needs_manual_checkin = provider.needs_manual_check_in()  # AnyRouter 等需要调用签到 API
-	http_signin_done = False  # 标记 HTTP 直连签到是否已完成
+	# 根据 signin_method 直接调度签到策略
+	signin_method = provider.signin_method
+	http_signin_done = False  # 标记 HTTP 签到是否已完成
+	all_cookies = user_cookies
+	# 本次触发前/后余额（用于准确判定“本次是否拿到奖励”）
+	run_balance_before: float | None = None
+	run_balance_after: float | None = None
 
-	# ========== AnyRouter: HTTP 优先策略 ==========
-	if needs_manual_checkin:
-		print(f'[信息] {account_name}: 使用 HTTP 优先策略（AnyRouter 模式）')
+	print(f'[信息] {account_name}: 签到策略 = {signin_method}')
 
+	# ========== browser_waf 模式：AnyRouter ==========
+	# 策略：HTTP 优先尝试签到 API，被 WAF 拦截时回退到浏览器获取 cookies
+	if signin_method == 'browser_waf':
 		# 第一步：尝试 HTTP 直连签到（无需 WAF cookies）
 		http_result = await try_direct_http_signin(
 			account_name=account_name,
@@ -415,13 +444,14 @@ async def process_single_account(
 		)
 
 		if http_result.success:
-			# HTTP 直连成功，查询余额
-			all_cookies = user_cookies
-			http_signin_done = True  # 标记签到已完成
+			# HTTP 直连成功
+			http_signin_done = True
+			run_balance_before = http_result.balance_before
+			run_balance_after = http_result.balance_after
 		elif http_result.error == 'WAF_BLOCKED':
 			# 被 WAF 拦截，回退到浏览器获取 WAF cookies
 			print(f'[回退] {account_name}: 被 WAF 拦截，启动浏览器获取 WAF cookies...')
-			all_cookies = await prepare_cookies_with_waf(account_name, provider, user_cookies, account.api_user)
+			all_cookies = await get_waf_cookies_for_browser_waf(account_name, provider, user_cookies)
 			if not all_cookies:
 				return SigninResult(
 					account_key=account_key,
@@ -430,7 +460,7 @@ async def process_single_account(
 					error='无法获取 WAF cookies'
 				)
 		elif http_result.error and http_result.error.startswith('SESSION_INVALID'):
-			# Session 无效，直接返回错误
+			# Session 无效
 			return SigninResult(
 				account_key=account_key,
 				account_name=account_name,
@@ -440,7 +470,7 @@ async def process_single_account(
 		else:
 			# 其他错误，尝试浏览器方式
 			print(f'[回退] {account_name}: HTTP 签到失败（{http_result.error}），尝试浏览器方式...')
-			all_cookies = await prepare_cookies_with_waf(account_name, provider, user_cookies, account.api_user)
+			all_cookies = await get_waf_cookies_for_browser_waf(account_name, provider, user_cookies)
 			if not all_cookies:
 				return SigninResult(
 					account_key=account_key,
@@ -449,10 +479,9 @@ async def process_single_account(
 					error='无法获取 WAF cookies'
 				)
 
-	# ========== AgentRouter OAuth ==========
-	elif needs_oauth_login:
-		# 使用 HTTP 请求触发签到（优先，适用于 GitHub Actions）
-		print(f'[信息] {account_name}: 使用 HTTP 请求触发签到（OAuth 账号）')
+	# ========== http_login 模式：AgentRouter ==========
+	# 策略：HTTP 访问登录页触发自动签到，OAuth 回退到浏览器
+	elif signin_method == 'http_login':
 		login_url = f'{provider.domain}{provider.login_path}'
 
 		result = await trigger_signin_via_http(
@@ -466,19 +495,34 @@ async def process_single_account(
 		)
 
 		if result.success:
-			# HTTP 签到成功
-			all_cookies = user_cookies
-		else:
-			# HTTP 失败，尝试浏览器方式（仅本地开发）
+			# 关键：把 HTTP 流程中获得的 WAF cookies 合并到后续请求（如果有的话）
+			# 并使用触发前/后余额作为本次签到验证依据。
+			if result.waf_cookies:
+				all_cookies = {**result.waf_cookies, **user_cookies}
+			if result.balance_before is not None and result.balance_after is not None:
+				print(f'[验证] {account_name}: 额度变化: ${result.balance_before} → ${result.balance_after} ({result.balance_after - result.balance_before:+.2f})')
+				run_balance_before = result.balance_before
+				run_balance_after = result.balance_after
+				# 余额不变通常意味着“今日已签到/冷却中”或“奖励延迟入账”
+				balance_unchanged = abs(result.balance_after - result.balance_before) < 0.01
+				if balance_unchanged:
+					print(f'[提示] {account_name}: 额度未变化，按“冷却/已签到”处理（如你确认没签到过，再考虑手动登录一次）')
+			http_signin_done = True
+		elif account.has_oauth_config():
+			# HTTP 失败且有 OAuth 配置，尝试浏览器方式（带 session cookie）
 			print(f'[回退] {account_name}: HTTP 签到失败，尝试浏览器方式...')
+			# AgentRouter等没有sign_in_path的provider需要force_oauth=True
+			# 因为签到是通过OAuth登录触发的，不是简单访问页面
+			needs_force_oauth = provider.sign_in_path is None
 			result = await perform_oauth_signin_with_chrome(
 				account_name=account_name,
 				domain=provider.domain,
 				login_url=login_url,
 				oauth_provider=account.oauth_provider,
-				log_fn=print
+				user_cookies=user_cookies,  # 传递 session cookie
+				log_fn=print,
+				force_oauth=needs_force_oauth
 			)
-
 			if not result.success:
 				return SigninResult(
 					account_key=account_key,
@@ -486,44 +530,52 @@ async def process_single_account(
 					status=SigninStatus.ERROR,
 					error=result.error or 'OAuth 登录失败'
 				)
-
-			all_cookies = user_cookies
-
-	elif needs_real_login:
-		# 使用真正的登录流程触发签到（用户名密码）
-		print(f'[信息] {account_name}: 使用用户名密码登录触发签到')
-		login_url = f'{provider.domain}{provider.login_path}'
-
-		result = await perform_real_login_signin(
-			account_name=account_name,
-			domain=provider.domain,
-			login_url=login_url,
-			username=account.username,
-			password=account.password,
-			required_cookies=provider.waf_cookie_names or [],
-			log_fn=print
-		)
-
-		if not result.success:
+			# 合并 cookies（理论上 OAuth 流程会在浏览器内完成，这里仅保持一致）
+			if result.waf_cookies:
+				all_cookies = {**result.waf_cookies, **user_cookies}
+			if result.balance_before is not None and result.balance_after is not None:
+				print(f'[验证] {account_name}: 额度变化: ${result.balance_before} → ${result.balance_after} ({result.balance_after - result.balance_before:+.2f})')
+				run_balance_before = result.balance_before
+				run_balance_after = result.balance_after
+			http_signin_done = True
+		elif account.has_login_credentials():
+			# 有用户名密码，尝试真正登录
+			print(f'[回退] {account_name}: HTTP 签到失败，尝试用户名密码登录...')
+			result = await perform_real_login_signin(
+				account_name=account_name,
+				domain=provider.domain,
+				login_url=login_url,
+				username=account.username,
+				password=account.password,
+				required_cookies=provider.waf_cookie_names or [],
+				log_fn=print
+			)
+			if not result.success:
+				return SigninResult(
+					account_key=account_key,
+					account_name=account_name,
+					status=SigninStatus.ERROR,
+					error=result.error or '登录失败'
+				)
+			all_cookies = {**result.waf_cookies, **user_cookies}
+			http_signin_done = True
+		else:
+			# 没有回退方案
 			return SigninResult(
 				account_key=account_key,
 				account_name=account_name,
 				status=SigninStatus.ERROR,
-				error=result.error or '登录失败'
+				error=result.error or 'HTTP 签到失败且无回退方案'
 			)
 
-		# 登录成功后，使用获取的 cookies 查询余额
-		all_cookies = {**result.waf_cookies, **user_cookies}
 	else:
-		# 准备 cookies（获取 WAF cookies）
-		all_cookies = await prepare_cookies_with_waf(account_name, provider, user_cookies, account.api_user)
-		if not all_cookies:
-			return SigninResult(
-				account_key=account_key,
-				account_name=account_name,
-				status=SigninStatus.ERROR,
-				error='无法获取 WAF cookies'
-			)
+		# 未知的 signin_method
+		return SigninResult(
+			account_key=account_key,
+			account_name=account_name,
+			status=SigninStatus.ERROR,
+			error=f'未知的签到策略: {signin_method}'
+		)
 
 	# 使用异步 HTTP 客户端（context manager 自动关闭）
 	async with httpx.AsyncClient(http2=True, timeout=HTTP_TIMEOUT_SECONDS) as client:
@@ -538,14 +590,27 @@ async def process_single_account(
 		if user_info:
 			print(f'[当前] {user_info.display}')
 			current_balance = user_info.quota
+			# 若还没拿到“本次触发前余额”，至少用当前余额兜底（避免 None）
+			if run_balance_before is None and not http_signin_done:
+				run_balance_before = current_balance
 		else:
 			current_balance = None
 
 		# 执行签到
 		api_success = True
-		if needs_manual_checkin and not http_signin_done:
-			# HTTP 直连失败后，使用浏览器获取的 WAF cookies 重试签到
+		api_returned_success = False
+
+		if http_signin_done:
+			# HTTP/浏览器方式已完成签到
+			print(f'[信息] {account_name}: 签到已完成')
+			api_returned_success = True
+		elif signin_method == 'browser_waf' and provider.sign_in_path:
+			# browser_waf 模式：本次触发前余额就是当前余额（调用签到前）
+			if user_info and run_balance_before is None:
+				run_balance_before = user_info.quota
+			# browser_waf 模式：需要调用签到 API（使用浏览器获取的 WAF cookies）
 			api_success = await execute_manual_signin(client, account_name, provider, headers)
+			api_returned_success = api_success
 
 			# 签到后再次查询余额
 			if api_success:
@@ -555,18 +620,12 @@ async def process_single_account(
 					print(f'[签到后] {user_info_after.display}')
 					current_balance = user_info_after.quota
 					user_info = user_info_after
-		elif needs_manual_checkin and http_signin_done:
-			# HTTP 直连已完成签到，只需查询余额
-			print(f'[信息] {account_name}: HTTP 直连签到已完成，查询余额确认')
-		elif needs_oauth_login:
-			# OAuth 登录已经在上面完成，签到已触发
-			print(f'[信息] {account_name}: 签到已通过 HTTP/浏览器触发完成')
-		elif needs_real_login:
-			# 真正登录已经在上面完成，签到已触发
-			print(f'[信息] {account_name}: 签到已通过用户名密码登录触发完成')
-		else:
-			# 没有登录凭据，通过浏览器模拟登录触发签到（已在 prepare_cookies_with_waf 中完成）
-			print(f'[信息] {account_name}: 签到已通过浏览器模拟登录触发')
+					run_balance_after = current_balance
+		elif signin_method == 'browser_waf' and not provider.sign_in_path:
+			# browser_waf 模式但 sign_in_path 为 None（如 AgentRouter）
+			# 访问 user_info 时已自动触发签到，标记为成功
+			print(f'[信息] {account_name}: 访问用户信息已触发自动签到')
+			api_returned_success = True
 
 		# 创建签到结果
 		result = create_signin_result(
@@ -576,7 +635,10 @@ async def process_single_account(
 			last_balance=last_balance,
 			last_signin=last_signin,
 			user_info=user_info,
-			api_success=api_success
+			api_success=api_success,
+			api_returned_success=api_returned_success,
+			balance_before_run=run_balance_before,
+			balance_after_run=run_balance_after,
 		)
 
 		# 输出结果
@@ -688,7 +750,7 @@ async def run_checkin() -> SigninSummary:
 
 	使用信号量控制并发，避免同时启动过多浏览器实例。
 	"""
-	print('[系统] AnyRouter.top 多账号自动签到脚本已启动')
+	print('[系统] 公益站 多账号自动签到脚本已启动')
 	print(f'[时间] 执行时间: {datetime.now().strftime("%Y-%m-%d %H:%M:%S")}')
 
 	# 初始化数据库（自动迁移）
@@ -745,10 +807,21 @@ async def run_checkin() -> SigninSummary:
 	summary = SigninSummary()
 	current_balances: dict[str, float] = {}
 
-	for i, result in enumerate(results):
+	for result in results:
 		summary.add_result(result)
-		if result.user_info:
-			current_balances[f'account_{i + 1}'] = result.user_info.quota
+		# 余额 hash 用于“是否发送通知”的变化检测：
+		# - 必须使用稳定 key（account_key），避免因排序/跳过导致误判
+		# - 即使账号被跳过，也应使用上次记录余额参与计算，避免 hash 抖动
+		balance: float | None = None
+		if result.balance_after is not None:
+			balance = result.balance_after
+		elif result.user_info:
+			balance = result.user_info.quota
+		elif result.balance_before is not None:
+			balance = result.balance_before
+
+		if balance is not None:
+			current_balances[result.account_key] = balance
 
 	# 检查余额变化
 	current_balance_hash = generate_balance_hash(current_balances) if current_balances else ''
@@ -800,7 +873,7 @@ async def main() -> None:
 		if summary.needs_notification:
 			content = build_notification_content(summary)
 			print(content)
-			notify.push_message('AnyRouter 签到提醒', content, msg_type='text')
+			notify.push_message('公益站 签到提醒', content, msg_type='text')
 			print('[通知] 已发送通知')
 		else:
 			print('[信息] 所有账号成功且无余额变化，跳过通知')

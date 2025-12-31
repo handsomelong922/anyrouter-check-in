@@ -27,10 +27,14 @@ from utils.constants import (
 	SIGNIN_HISTORY_FILE,
 )
 
+# 是否禁用数据库：用于 GitHub Actions（更安全、更确定），本地默认不禁用
+_DISABLE_DATABASE = os.getenv('DISABLE_DATABASE', '').strip().lower() in ('1', 'true', 'yes', 'on')
+_DISABLE_DATABASE = _DISABLE_DATABASE or os.getenv('GITHUB_ACTIONS', '').strip().lower() == 'true'
+
 # 尝试导入数据库模块（可选依赖）
 try:
 	from utils.database import get_database
-	HAS_DATABASE = True
+	HAS_DATABASE = not _DISABLE_DATABASE
 except ImportError:
 	HAS_DATABASE = False
 
@@ -41,6 +45,9 @@ def _atomic_write(file_path: str, content: str) -> None:
 	确保写入过程中崩溃不会损坏原文件。
 	"""
 	dir_path = os.path.dirname(file_path) or '.'
+	# 确保目录存在（GitHub Actions/禁用数据库时也需要能写 data/）
+	if dir_path and dir_path != '.':
+		os.makedirs(dir_path, exist_ok=True)
 	fd, temp_path = tempfile.mkstemp(dir=dir_path, suffix='.tmp')
 	try:
 		with os.fdopen(fd, 'w', encoding='utf-8') as f:
@@ -78,7 +85,8 @@ class UserBalance:
 	@property
 	def display(self) -> str:
 		"""格式化显示"""
-		return f':money: 当前余额: ${self.quota}, 已使用: ${self.used_quota}'
+		# 避免表情/占位符导致部分终端乱码，保持纯文本更稳定
+		return f'当前余额: ${self.quota}, 已使用: ${self.used_quota}'
 
 
 @dataclass
@@ -326,6 +334,11 @@ def analyze_balance_change(
 ) -> tuple[SigninStatus, float | None]:
 	"""分析余额变化，判断签到状态
 
+	注意：余额变化只反映签到效果，不代表签到请求是否成功。
+	- 余额增加 = 签到成功并获得奖励
+	- 余额不变 = 今日已签到（冷却期内，无重复奖励）
+	- 余额减少 = 正常使用消耗，签到本身可能成功
+
 	Args:
 	    current_balance: 当前余额
 	    last_balance: 上次记录的余额
@@ -343,16 +356,10 @@ def analyze_balance_change(
 	if diff > 0:
 		# 余额增加 = 签到成功
 		return SigninStatus.SUCCESS, diff
-	elif diff == 0:
-		# 余额没变
-		if is_in_cooldown(last_signin):
-			return SigninStatus.COOLDOWN, 0.0
-		else:
-			# 不在冷却期但余额没增加 = 签到失败
-			return SigninStatus.FAILED, 0.0
 	else:
-		# 余额减少 = 异常
-		return SigninStatus.FAILED, diff
+		# 余额不变或减少 = 今日已签到（冷却期内）或正常使用消耗
+		# 不再判定为 FAILED，因为签到 API 可能已成功
+		return SigninStatus.COOLDOWN, diff
 
 
 # ============ 数据库集成 ============
@@ -461,7 +468,8 @@ def load_signin_history_from_db() -> dict[str, SigninRecord] | None:
 			account_key = f'{account.provider_name}_{account.api_user}'
 			last_signin = last_signins.get(account.id)
 
-			if last_signin and last_signin.status == 'success':
+			# 注意：数据库层已过滤掉 skipped/error/failed，这里再做一次防御性过滤
+			if last_signin and last_signin.status in ('success', 'cooldown', 'first_run'):
 				history[account_key] = SigninRecord(
 					time=last_signin.signin_time,
 					balance=last_signin.balance_after
