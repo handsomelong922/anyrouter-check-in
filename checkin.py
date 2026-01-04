@@ -16,6 +16,7 @@ from dotenv import load_dotenv
 from playwright.async_api import async_playwright
 
 from utils.config import AccountConfig, AppConfig, load_accounts_config
+from utils.constants import QUOTA_DIVISOR
 from utils.notify import notify
 from utils.result import (
 	SigninRecord,
@@ -121,10 +122,23 @@ def get_user_info(client, headers, user_info_url: str):
 
 		if response.status_code == 200:
 			data = response.json()
-			if data.get('success'):
-				user_data = data.get('data', {})
-				quota = round(user_data.get('quota', 0) / 500000, 2)
-				used_quota = round(user_data.get('used_quota', 0) / 500000, 2)
+			success_flag = (
+				data.get('success') is True
+				or data.get('ret') == 1
+				or data.get('code') == 0
+			)
+			if success_flag:
+				user_data = data.get('data')
+				if user_data is None:
+					user_data = data
+				if not isinstance(user_data, dict):
+					user_data = {}
+
+				raw_quota = user_data.get('quota', 0)
+				raw_used_quota = user_data.get('used_quota', 0)
+
+				quota = round(raw_quota / QUOTA_DIVISOR, 2) if isinstance(raw_quota, (int, float)) else 0
+				used_quota = round(raw_used_quota / QUOTA_DIVISOR, 2) if isinstance(raw_used_quota, (int, float)) else 0
 				return {
 					'success': True,
 					'quota': quota,
