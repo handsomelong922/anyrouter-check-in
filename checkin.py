@@ -486,7 +486,7 @@ async def main():
 		notify_content = '\n'.join([time_info, '', *notification_lines, *summary])
 
 		print('\n' + notify_content)
-		notify.push_message('公益站签到提醒', notify_content, msg_type='text')
+		notify.push_message('API签到提醒', notify_content, msg_type='text')
 		print('\n[通知] 已发送签到通知')
 	else:
 		print('[信息] 无需发送通知（全部跳过且余额无变化）')
