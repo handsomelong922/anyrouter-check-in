@@ -51,38 +51,63 @@ def parse_cookies(cookies_data):
 
 
 async def get_waf_cookies_with_playwright(account_name: str, login_url: str, required_cookies: list[str]):
-	"""使用 Playwright 获取 WAF cookies（隐私模式）"""
+	"""使用 Playwright 获取 WAF cookies（优先使用Firefox，SSL兼容性更好）"""
 	print(f'[处理中] {account_name}: 启动浏览器获取 WAF cookies...')
 
 	async with async_playwright() as p:
 		import tempfile
 
 		with tempfile.TemporaryDirectory() as temp_dir:
-			context = await p.chromium.launch_persistent_context(
-				user_data_dir=temp_dir,
-				headless=False,
-				user_agent='Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/138.0.0.0 Safari/537.36',
-				viewport={'width': 1920, 'height': 1080},
-				args=[
-					'--disable-blink-features=AutomationControlled',
-					'--disable-dev-shm-usage',
-					'--disable-web-security',
-					'--disable-features=VizDisplayCompositor',
-					'--no-sandbox',
-				],
-			)
-
-			page = await context.new_page()
+			# 优先尝试Firefox（SSL兼容性通常更好）
+			browser_type = 'firefox'
+			context = None
 
 			try:
+				print(f'[信息] {account_name}: 尝试使用Firefox浏览器...')
+
+				context = await p.firefox.launch_persistent_context(
+					user_data_dir=temp_dir,
+					headless=True,  # Firefox支持headless
+					user_agent='Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:120.0) Gecko/20100101 Firefox/120.0',
+					viewport={'width': 1920, 'height': 1080},
+					args=[
+						'--ignore-certificate-errors',
+					],
+					ignore_https_errors=True,
+					accept_downloads=False,
+				)
+
+			except Exception as e:
+				print(f'[警告] {account_name}: Firefox启动失败 ({e})，尝试Chrome...')
+				browser_type = 'chromium'
+				context = await p.chromium.launch_persistent_context(
+					user_data_dir=temp_dir,
+					headless=True,
+					user_agent='Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+					viewport={'width': 1920, 'height': 1080},
+					args=[
+						'--disable-blink-features=AutomationControlled',
+						'--disable-dev-shm-usage',
+						'--disable-web-security',
+						'--no-sandbox',
+						'--ignore-certificate-errors',
+						'--allow-running-insecure-content',
+						'--ssl-version-fallback-min=tls1',
+						'--tls1-2',
+						'--tls1-3',
+					],
+					ignore_https_errors=True,
+				)
+
+			try:
+				page = await context.new_page()
+
 				print(f'[处理中] {account_name}: 访问登录页获取初始 cookies...')
 
-				await page.goto(login_url, wait_until='networkidle')
+				await page.goto(login_url, wait_until='domcontentloaded', timeout=30000)
 
-				try:
-					await page.wait_for_function('document.readyState === "complete"', timeout=5000)
-				except Exception:
-					await page.wait_for_timeout(3000)
+				# 等待页面加载
+				await page.wait_for_timeout(3000)
 
 				cookies = await page.context.cookies()
 
@@ -93,7 +118,7 @@ async def get_waf_cookies_with_playwright(account_name: str, login_url: str, req
 					if cookie_name in required_cookies and cookie_value is not None:
 						waf_cookies[cookie_name] = cookie_value
 
-				print(f'[信息] {account_name}: 获取到 {len(waf_cookies)} 个 WAF cookies')
+				print(f'[信息] {account_name}: 使用{browser_type}获取到 {len(waf_cookies)}/{len(required_cookies)} 个 WAF cookies')
 
 				missing_cookies = [c for c in required_cookies if c not in waf_cookies]
 
@@ -110,7 +135,8 @@ async def get_waf_cookies_with_playwright(account_name: str, login_url: str, req
 
 			except Exception as e:
 				print(f'[失败] {account_name}: 获取 WAF cookies 时发生错误: {e}')
-				await context.close()
+				if context:
+					await context.close()
 				return None
 
 
@@ -147,7 +173,10 @@ async def prepare_cookies(account_name: str, provider_config, user_cookies: dict
 			print(f'[失败] {account_name}: 无法获取 WAF cookies')
 			return None
 	else:
-		print(f'[信息] {account_name}: 无需绕过 WAF，直接使用用户 cookies')
+		print(
+			f'[信息] {account_name}: 服务商 {provider_config.name} 无需绕过 WAF，'
+			f'直接使用用户 cookies'
+		)
 
 	return {**waf_cookies, **user_cookies}
 
@@ -439,7 +468,9 @@ async def main():
 		save_balance_hash(current_balance_hash)
 
 	# 判断是否需要发送通知
-	need_notify = failed_count > 0 or balance_changed or any(r.status == SigninStatus.SUCCESS for r in results)
+	need_notify = failed_count > 0 or balance_changed or any(
+		r.status in (SigninStatus.SUCCESS, SigninStatus.SKIPPED) for r in results
+	)
 
 	if need_notify:
 		# 构建通知内容
@@ -447,7 +478,24 @@ async def main():
 
 		for result in results:
 			if result.status == SigninStatus.SKIPPED:
-				continue  # 跳过的账号不通知
+				from utils.result import format_time_remaining, get_next_signin_time
+
+				last_signin_time = (
+					result.last_signin.strftime('%Y-%m-%d %H:%M:%S')
+					if result.last_signin else '未知'
+				)
+				remaining = format_time_remaining(get_next_signin_time(result.last_signin))
+				balance_value = result.balance_after if result.balance_after is not None else result.balance_before
+				balance = f'{balance_value}' if balance_value is not None else '未知'
+				today_gain_value = result.balance_diff if result.balance_diff is not None else 0.0
+				today_gain = f'{today_gain_value}'
+
+				line = (
+					f'[已跳过] {result.account_name} | 上次签到: {last_signin_time} | '
+					f'剩余: {remaining} | 余额: ${balance}(今日：+${today_gain})'
+				)
+				notification_lines.append(line)
+				continue
 
 			status_icon = {
 				SigninStatus.SUCCESS: '[成功]',
@@ -471,15 +519,14 @@ async def main():
 			notification_lines.append(line)
 
 		# 统计摘要
+		cooldown_count = sum(1 for r in results if r.status in (SigninStatus.SKIPPED, SigninStatus.COOLDOWN))
 		summary = [
 			'',
-			'[统计] 签到统计:',
-			f'   成功: {success_count}/{total_count}',
+			(
+				f'[统计] 签到结果: 总计: {total_count} | 成功: {success_count} | '
+				f'冷却: {cooldown_count} | 失败: {failed_count}'
+			),
 		]
-		if failed_count > 0:
-			summary.append(f'   失败: {failed_count}/{total_count}')
-		if skipped_count > 0:
-			summary.append(f'   跳过: {skipped_count}/{total_count}')
 
 		time_info = f'[时间] 执行时间: {datetime.now().strftime("%Y-%m-%d %H:%M:%S")}'
 

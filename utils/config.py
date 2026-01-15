@@ -44,8 +44,22 @@ class ProviderConfig:
 
 		配置格式:
 		- 基础: {"domain": "https://example.com"}
-		- 完整: {"domain": "https://example.com", "login_path": "/login", "api_user_key": "x-api-user", "bypass_method": "waf_cookies", ...}
+		- 完整: {"domain": "https://example.com", "login_path": "/login", "api_user_key": "x-api-user", "signin_method": "browser_waf", ...}
 		"""
+		# 兼容 signin_method 字段（用户配置）
+		signin_method = data.get('signin_method')
+
+		# 将 signin_method 转换为 bypass_method
+		bypass_method = None
+		if signin_method == 'browser_waf':
+			bypass_method = 'waf_cookies'
+		elif signin_method == 'http_login':
+			bypass_method = None
+
+		# 如果直接指定了 bypass_method，优先使用
+		if 'bypass_method' in data:
+			bypass_method = data.get('bypass_method')
+
 		return cls(
 			name=name,
 			domain=data['domain'],
@@ -53,7 +67,7 @@ class ProviderConfig:
 			sign_in_path=data.get('sign_in_path', '/api/user/sign_in'),
 			user_info_path=data.get('user_info_path', '/api/user/self'),
 			api_user_key=data.get('api_user_key', 'new-api-user'),
-			bypass_method=data.get('bypass_method'),
+			bypass_method=bypass_method,
 			waf_cookie_names = data.get('waf_cookie_names'),
 		)
 
