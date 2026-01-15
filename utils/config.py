@@ -100,16 +100,7 @@ class AppConfig:
 				bypass_method='waf_cookies',
 				waf_cookie_names=['acw_tc', 'cdn_sec_tc', 'acw_sc__v2'],
 			),
-			'agentrouter': ProviderConfig(
-				name='agentrouter',
-				domain='https://agentrouter.org',
-				login_path='/login',
-				sign_in_path=None,  # 无独立签到API，通过登录触发
-				user_info_path='/api/user/self',
-				api_user_key='new-api-user',
-				bypass_method=None,
-				waf_cookie_names=None,
-			),
+			# agentrouter 已从内置配置移除（功能仍可通过 PROVIDERS 环境变量自定义）
 		}
 
 		# 尝试从环境变量加载自定义 providers

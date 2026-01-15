@@ -1,16 +1,26 @@
 # 公益站 多账号自动签到
 
-多平台多账号自动签到工具，支持所有基于 NewAPI、OneAPI 的平台。内置支持 AnyRouter 与 AgentRouter，其他平台可根据文档自定义配置。
+多平台多账号自动签到工具，支持所有基于 NewAPI、OneAPI 的平台。内置支持 AnyRouter，其他平台可根据文档自定义配置。
 
 支持 Claude Sonnet 4.5、GPT-5-Codex、Claude Code 百万上下文、Gemini-2.5-Pro 等模型。
 
-📢 **注册链接**：[AnyRouter](https://anyrouter.top/register?aff=0FzF)（限时送 100 美金） | [AgentRouter](https://agentrouter.org/register?aff=rLco)
+📢 **注册链接**：[AnyRouter](https://anyrouter.top/register?aff=0FzF)（限时送 100 美金）
 
 **如果本项目对你有帮助，请点个 Star，感谢支持！⭐**
 
 ---
 
 ## 更新日志
+
+### v2.8.0 (2026-01-15)
+
+- 📝 **优化项目定位**
+  - README 中移除 AgentRouter 渠道推荐（功能保留，可通过环境变量配置）
+  - 默认配置仅内置 AnyRouter，简化用户上手流程
+  - 更新配置示例和技术文档，聚焦 AnyRouter 使用说明
+- 🔧 **配置优化**
+  - 从 `utils/config.py` 默认 providers 中移除 agentrouter
+  - 保留完整功能支持，用户仍可通过 `PROVIDERS` 环境变量自定义
 
 ### v2.7.0 (2026-01-02)
 
@@ -289,7 +299,7 @@ scripts\setup_task.bat
 
 ### 获取账号信息
 
-访问 [anyrouter.top](https://anyrouter.top) 或 [agentrouter.org](https://agentrouter.org)，登录后按 `F12` 打开开发者工具：
+访问 [anyrouter.top](https://anyrouter.top)，登录后按 `F12` 打开开发者工具：
 
 **获取 Session Cookie：**
 
@@ -316,13 +326,13 @@ scripts\setup_task.bat
 **多账号示例：**
 
 ```json
-[{"name":"账号1","provider":"anyrouter","cookies":{"session":"session1"},"api_user":"12345"},{"name":"账号2","provider":"agentrouter","cookies":{"session":"session2"},"api_user":"67890"}]
+[{"name":"账号1","provider":"anyrouter","cookies":{"session":"session1"},"api_user":"12345"},{"name":"账号2","provider":"anyrouter","cookies":{"session":"session2"},"api_user":"67890"}]
 ```
 
 **字段说明：**
 
 - `name`（可选）：账号显示名称，用于日志和通知
-- `provider`（可选）：平台类型，默认 `anyrouter`，可选 `agentrouter`
+- `provider`（可选）：平台类型，默认 `anyrouter`，支持通过 `PROVIDERS` 环境变量自定义其他平台
 - `cookies`（必需）：包含 session 的对象
 - `api_user`（必需）：API 用户标识符
 
@@ -379,7 +389,7 @@ CUSTOM_SMTP_SERVER=smtp.gmail.com:587
 
 ## 自定义 Provider（可选）
 
-内置的 `anyrouter` 和 `agentrouter` 无需额外配置。如需添加其他平台：
+内置支持 `anyrouter`。如需添加其他平台（如 AgentRouter 或其他基于 NewAPI/OneAPI 的平台）：
 
 **基础配置（仅需域名）：**
 
@@ -456,7 +466,7 @@ CUSTOM_SMTP_SERVER=smtp.gmail.com:587
 
 **解决方案**：
 
-1. 重新登录 anyrouter.top 或 agentrouter.org
+1. 重新登录对应的平台网站（如 anyrouter.top）
 2. 按 F12 获取新的 session 值
 3. 更新 `.env` 文件中的 session
 
@@ -538,42 +548,28 @@ scripts\run_checkin.bat manual
 
 ### 签到机制说明
 
-**重要：AnyRouter 和 AgentRouter 采用不同的签到机制**
-
-| 平台 | 签到方式 | 签到 API | WAF 绕过 | 浏览器依赖 |
-|------|---------|---------|---------|-----------|
-| **AnyRouter** | 显式 API 调用 | `/api/user/sign_in` | 需要（acw_tc, cdn_sec_tc, acw_sc__v2） | 需要（Playwright） |
-| **AgentRouter** | 自动触发 | 无（通过 `/api/user/self` 触发） | 不需要 | 不需要 |
-
 **AnyRouter 签到流程：**
-1. 使用 Playwright 访问登录页获取 WAF cookies
+1. 使用 Playwright 访问登录页获取 WAF cookies（acw_tc, cdn_sec_tc, acw_sc__v2）
 2. 合并 WAF cookies + session cookie
 3. 调用 `/api/user/sign_in` 接口完成签到
-
-**AgentRouter 签到流程：**
-1. 仅需 session cookie
-2. 访问 `/api/user/self`（用户信息接口）时自动触发签到
-3. 无需浏览器，本地和 GitHub Actions 均完全支持
+4. 对比签到前后余额验证结果
 
 **通用说明：**
 - **签到周期**：每24小时可签到一次
 - **奖励发放**：签到成功后余额自动增加（约$0.01-$25不等）
 - **结果判断**：基于余额变化判断签到是否成功
+- **其他平台**：支持任何基于 NewAPI/OneAPI 的平台，可通过 `PROVIDERS` 环境变量自定义配置
 
 ### 脚本工作原理
 
-本脚本根据不同平台采用不同策略：
-
-**AnyRouter（需要 WAF 绕过）：**
+**AnyRouter 签到策略：**
 1. 使用 Playwright 访问登录页获取 WAF cookies
 2. 合并 WAF cookies 与用户 session cookie
 3. 调用 `/api/user/sign_in` 接口
 4. 对比签到前后余额验证结果
 
-**AgentRouter（自动签到）：**
-1. 直接使用 session cookie 发起 HTTP 请求
-2. 访问 `/api/user/self` 接口（自动触发签到）
-3. 对比签到前后余额验证结果
+**自定义平台：**
+支持通过 `PROVIDERS` 环境变量配置其他基于 NewAPI/OneAPI 的平台，详见"自定义 Provider"章节
 
 ### WAF 绕过机制
 
@@ -673,6 +669,16 @@ uv run python tests/test_config.py
 # 设置定时任务（右键"以管理员身份运行"）
 scripts\setup_task.bat
 ```
+
+---
+
+## 参考项目
+
+本项目基于以下开源项目开发和改进：
+
+- [millylee/anyrouter-check-in](https://github.com/millylee/anyrouter-check-in) - 原始项目，提供 AnyRouter 和 AgentRouter 自动签到功能
+- [NewAPI](https://github.com/Calcium-Ion/new-api) - OneAPI 的衍生版本，统一的 API 调用接口
+- [Playwright](https://github.com/microsoft/playwright) - 微软开发的浏览器自动化框架，用于 WAF 绕过
 
 ---
 
