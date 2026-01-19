@@ -334,14 +334,14 @@ def analyze_balance_change(
 ) -> tuple[SigninStatus, float | None]:
 	"""分析余额变化，判断签到状态
 
-	注意：余额变化只反映签到效果，不代表签到请求是否成功。
+	注意：比较签到前后余额，判断本次签到是否获得奖励。
 	- 余额增加 = 签到成功并获得奖励
 	- 余额不变 = 今日已签到（冷却期内，无重复奖励）
-	- 余额减少 = 正常使用消耗，签到本身可能成功
+	- 余额减少 = 异常情况（理论上不应该发生）
 
 	Args:
-	    current_balance: 当前余额
-	    last_balance: 上次记录的余额
+	    current_balance: 签到后余额
+	    last_balance: 签到前余额（如果无法获取实时值，则使用历史记录）
 	    last_signin: 上次签到时间
 
 	Returns:
@@ -510,6 +510,37 @@ def get_today_total_gain(account_key: str) -> float:
 	except Exception as e:
 		print(f'[警告] 获取今日累计收益失败: {e}')
 		return 0.0
+
+
+def get_current_cycle_first_signin_time(account_key: str):
+	"""获取当前签到周期（24小时）内首次成功签到的时间
+
+	Args:
+	    account_key: 账号唯一标识（provider_apiuser）
+
+	Returns:
+	    首次签到时间的datetime对象，如果没有则返回None
+	"""
+	if not HAS_DATABASE:
+		return None
+
+	try:
+		db = get_database()
+		# 解析 account_key 获取 provider 和 api_user
+		parts = account_key.split('_', 1)
+		if len(parts) != 2:
+			return None
+
+		provider_name, api_user = parts
+		# 查找账号 ID
+		account = db.get_account_by_key(provider_name, api_user)
+		if not account:
+			return None
+
+		return db.get_current_cycle_first_signin_time(account.id)
+	except Exception as e:
+		print(f'[警告] 获取首次签到时间失败: {e}')
+		return None
 
 
 def load_signin_history_with_db() -> dict[str, SigninRecord]:

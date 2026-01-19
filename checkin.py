@@ -51,63 +51,38 @@ def parse_cookies(cookies_data):
 
 
 async def get_waf_cookies_with_playwright(account_name: str, login_url: str, required_cookies: list[str]):
-	"""使用 Playwright 获取 WAF cookies（优先使用Firefox，SSL兼容性更好）"""
+	"""使用 Playwright 获取 WAF cookies（使用可见浏览器窗口绕过Cloudflare检测）"""
 	print(f'[处理中] {account_name}: 启动浏览器获取 WAF cookies...')
 
 	async with async_playwright() as p:
 		import tempfile
 
 		with tempfile.TemporaryDirectory() as temp_dir:
-			# 优先尝试Firefox（SSL兼容性通常更好）
-			browser_type = 'firefox'
-			context = None
+			# 使用Chromium，非无头模式（Cloudflare检测）
+			context = await p.chromium.launch_persistent_context(
+				user_data_dir=temp_dir,
+				headless=False,  # 必须是False，Cloudflare会检测无头浏览器
+				user_agent='Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/138.0.0.0 Safari/537.36',
+				viewport={'width': 1920, 'height': 1080},
+				args=[
+					'--disable-blink-features=AutomationControlled',
+					'--disable-dev-shm-usage',
+					'--disable-web-security',
+					'--no-sandbox',
+				],
+			)
+
+			page = await context.new_page()
 
 			try:
-				print(f'[信息] {account_name}: 尝试使用Firefox浏览器...')
+				print(f'[处理中] {account_name}: 访问登录页获取 WAF cookies...')
 
-				context = await p.firefox.launch_persistent_context(
-					user_data_dir=temp_dir,
-					headless=True,  # Firefox支持headless
-					user_agent='Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:120.0) Gecko/20100101 Firefox/120.0',
-					viewport={'width': 1920, 'height': 1080},
-					args=[
-						'--ignore-certificate-errors',
-					],
-					ignore_https_errors=True,
-					accept_downloads=False,
-				)
+				await page.goto(login_url, wait_until='networkidle')
 
-			except Exception as e:
-				print(f'[警告] {account_name}: Firefox启动失败 ({e})，尝试Chrome...')
-				browser_type = 'chromium'
-				context = await p.chromium.launch_persistent_context(
-					user_data_dir=temp_dir,
-					headless=True,
-					user_agent='Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
-					viewport={'width': 1920, 'height': 1080},
-					args=[
-						'--disable-blink-features=AutomationControlled',
-						'--disable-dev-shm-usage',
-						'--disable-web-security',
-						'--no-sandbox',
-						'--ignore-certificate-errors',
-						'--allow-running-insecure-content',
-						'--ssl-version-fallback-min=tls1',
-						'--tls1-2',
-						'--tls1-3',
-					],
-					ignore_https_errors=True,
-				)
-
-			try:
-				page = await context.new_page()
-
-				print(f'[处理中] {account_name}: 访问登录页获取初始 cookies...')
-
-				await page.goto(login_url, wait_until='domcontentloaded', timeout=30000)
-
-				# 等待页面加载
-				await page.wait_for_timeout(3000)
+				try:
+					await page.wait_for_function('document.readyState === "complete"', timeout=5000)
+				except Exception:
+					await page.wait_for_timeout(3000)
 
 				cookies = await page.context.cookies()
 
@@ -118,7 +93,7 @@ async def get_waf_cookies_with_playwright(account_name: str, login_url: str, req
 					if cookie_name in required_cookies and cookie_value is not None:
 						waf_cookies[cookie_name] = cookie_value
 
-				print(f'[信息] {account_name}: 使用{browser_type}获取到 {len(waf_cookies)}/{len(required_cookies)} 个 WAF cookies')
+				print(f'[信息] {account_name}: 获取到 {len(waf_cookies)}/{len(required_cookies)} 个 WAF cookies')
 
 				missing_cookies = [c for c in required_cookies if c not in waf_cookies]
 
@@ -335,7 +310,7 @@ async def check_in_account(
 
 		# 基于余额变化分析签到结果
 		if balance_after is not None:
-			status, balance_diff = analyze_balance_change(balance_after, last_balance, last_signin_time)
+			status, balance_diff = analyze_balance_change(balance_after, balance_before, last_signin_time)
 
 			if status == SigninStatus.SUCCESS:
 				print(f'[成功] {account_name}: 签到成功！余额增加 ${balance_diff}')
@@ -487,13 +462,22 @@ async def main():
 				remaining = format_time_remaining(get_next_signin_time(result.last_signin))
 				balance_value = result.balance_after if result.balance_after is not None else result.balance_before
 				balance = f'{balance_value}' if balance_value is not None else '未知'
-				# 获取今日累计收益
+				# 获取今日累计收益和首次签到时间
+				from utils.result import get_current_cycle_first_signin_time
 				today_gain_value = get_today_total_gain(result.account_key)
+				first_signin_time = get_current_cycle_first_signin_time(result.account_key)
 				today_gain = f'{today_gain_value}'
 
+				# 构建通知文本
+				gain_text = f'(+${today_gain}'
+				if first_signin_time:
+					time_str = first_signin_time.strftime('%Y/%m/%d %H:%M')
+					gain_text += f'，签到成功时间 {time_str}'
+				gain_text += ')'
+
 				line = (
-					f'[已跳过] {result.account_name} | 上次签到: {last_signin_time} | '
-					f'剩余: {remaining} | 余额: ${balance}(今日：+${today_gain})'
+					f'[冷却中] {result.account_name} | 上次签到: {last_signin_time} | '
+					f'剩余: {remaining} | 余额: ${balance}{gain_text}'
 				)
 				notification_lines.append(line)
 				continue
@@ -510,11 +494,20 @@ async def main():
 
 			if result.user_info:
 				line += f'\n   余额: ${result.user_info.quota}'
-				# 获取今日累计收益
-				from utils.result import get_today_total_gain
+				# 获取今日累计收益和首次签到时间
+				from utils.result import get_current_cycle_first_signin_time, get_today_total_gain
+
 				today_gain_value = get_today_total_gain(result.account_key)
+				first_signin_time = get_current_cycle_first_signin_time(result.account_key)
+
 				if today_gain_value > 0:
-					line += f' (今日：+${today_gain_value})'
+					gain_text = f' (+${today_gain_value}'
+					# 如果有首次签到时间，添加到括号中
+					if first_signin_time:
+						time_str = first_signin_time.strftime('%Y/%m/%d %H:%M')
+						gain_text += f'，签到成功时间 {time_str}'
+					gain_text += ')'
+					line += gain_text
 				elif result.balance_diff is not None and result.balance_diff != 0:
 					# 如果没有今日累计记录，显示单次变化
 					sign = '+' if result.balance_diff > 0 else ''

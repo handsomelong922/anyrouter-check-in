@@ -472,7 +472,7 @@ class Database:
 		cursor = conn.execute('''
 			SELECT signin_time
 			FROM signin_records
-			WHERE account_id = ? AND status = 'success'
+			WHERE account_id = ? AND balance_diff > 0
 			ORDER BY signin_time DESC
 			LIMIT 1
 		''', (account_id,))
@@ -495,13 +495,69 @@ class Database:
 			SELECT COALESCE(SUM(balance_diff), 0) as total_gain
 			FROM signin_records
 			WHERE account_id = ?
-			  AND status = 'success'
 			  AND balance_diff > 0
 			  AND signin_time >= ?
 			  AND signin_time < ?
 		''', (account_id, base_time.isoformat(), end_time.isoformat()))
 		row = cursor.fetchone()
 		return round(row['total_gain'], 2) if row else 0.0
+
+	def get_current_cycle_first_signin_time(self, account_id: int):
+		"""获取当前签到周期（24小时）内首次成功签到的时间
+
+		基于最后一次成功签到时间，获取该周期内的第一次签到时间。
+		如果本周期只有一次签到，返回那次签到的时间。
+
+		Args:
+		    account_id: 账号ID
+
+		Returns:
+		    首次签到时间的datetime对象，如果没有则返回None
+		"""
+		conn = self.connect()
+		# 获取最后一次成功签到的时间作为基准
+		cursor = conn.execute('''
+			SELECT signin_time
+			FROM signin_records
+			WHERE account_id = ? AND balance_diff > 0
+			ORDER BY signin_time DESC
+			LIMIT 1
+		''', (account_id,))
+		row = cursor.fetchone()
+		if not row:
+			return None
+
+		base_time = row['signin_time']
+		# 如果是字符串，转换为datetime
+		if isinstance(base_time, str):
+			from datetime import datetime
+			base_time = datetime.fromisoformat(base_time)
+
+		# 计算24小时后的结束时间
+		from datetime import timedelta
+		end_time = base_time + timedelta(hours=24)
+
+		# 获取该时间范围内最早的一次成功签到
+		cursor = conn.execute('''
+			SELECT signin_time
+			FROM signin_records
+			WHERE account_id = ?
+			  AND balance_diff > 0
+			  AND signin_time >= ?
+			  AND signin_time < ?
+			ORDER BY signin_time ASC
+			LIMIT 1
+		''', (account_id, base_time.isoformat(), end_time.isoformat()))
+		row = cursor.fetchone()
+		if not row:
+			return None
+
+		first_signin_time = row['signin_time']
+		if isinstance(first_signin_time, str):
+			from datetime import datetime
+			first_signin_time = datetime.fromisoformat(first_signin_time)
+
+		return first_signin_time
 
 	def _row_to_signin_record(self, row: sqlite3.Row) -> SigninRecordRow:
 		"""将数据库行转换为 SigninRecordRow"""
