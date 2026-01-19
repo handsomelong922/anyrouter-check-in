@@ -481,6 +481,37 @@ def load_signin_history_from_db() -> dict[str, SigninRecord] | None:
 		return None
 
 
+def get_today_total_gain(account_key: str) -> float:
+	"""获取指定账号今日的累计签到收益
+
+	Args:
+	    account_key: 账号唯一标识（provider_apiuser）
+
+	Returns:
+	    今日累计收益（美元）
+	"""
+	if not HAS_DATABASE:
+		return 0.0
+
+	try:
+		db = get_database()
+		# 解析 account_key 获取 provider 和 api_user
+		parts = account_key.split('_', 1)
+		if len(parts) != 2:
+			return 0.0
+
+		provider_name, api_user = parts
+		# 查找账号 ID
+		account = db.get_account_by_key(provider_name, api_user)
+		if not account:
+			return 0.0
+
+		return db.get_today_total_gain(account.id)
+	except Exception as e:
+		print(f'[警告] 获取今日累计收益失败: {e}')
+		return 0.0
+
+
 def load_signin_history_with_db() -> dict[str, SigninRecord]:
 	"""加载签到历史（优先数据库，后备 JSON 文件）
 

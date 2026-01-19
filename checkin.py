@@ -478,7 +478,7 @@ async def main():
 
 		for result in results:
 			if result.status == SigninStatus.SKIPPED:
-				from utils.result import format_time_remaining, get_next_signin_time
+				from utils.result import format_time_remaining, get_next_signin_time, get_today_total_gain
 
 				last_signin_time = (
 					result.last_signin.strftime('%Y-%m-%d %H:%M:%S')
@@ -487,7 +487,8 @@ async def main():
 				remaining = format_time_remaining(get_next_signin_time(result.last_signin))
 				balance_value = result.balance_after if result.balance_after is not None else result.balance_before
 				balance = f'{balance_value}' if balance_value is not None else '未知'
-				today_gain_value = result.balance_diff if result.balance_diff is not None else 0.0
+				# 获取今日累计收益
+				today_gain_value = get_today_total_gain(result.account_key)
 				today_gain = f'{today_gain_value}'
 
 				line = (
@@ -509,7 +510,13 @@ async def main():
 
 			if result.user_info:
 				line += f'\n   余额: ${result.user_info.quota}'
-				if result.balance_diff is not None and result.balance_diff != 0:
+				# 获取今日累计收益
+				from utils.result import get_today_total_gain
+				today_gain_value = get_today_total_gain(result.account_key)
+				if today_gain_value > 0:
+					line += f' (今日：+${today_gain_value})'
+				elif result.balance_diff is not None and result.balance_diff != 0:
+					# 如果没有今日累计记录，显示单次变化
 					sign = '+' if result.balance_diff > 0 else ''
 					line += f' ({sign}${result.balance_diff})'
 

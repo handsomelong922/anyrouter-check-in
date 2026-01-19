@@ -448,13 +448,60 @@ class Database:
 		cursor = conn.execute('''
 			SELECT * FROM signin_records
 			WHERE id IN (
-				-- 只取“会影响冷却期”的记录，避免被 skipped/error/failed 这类运行记录污染
+				-- 只取"会影响冷却期"的记录，避免被 skipped/error/failed 这类运行记录污染
 				SELECT MAX(id) FROM signin_records
 				WHERE status IN ('success', 'cooldown', 'first_run')
 				GROUP BY account_id
 			)
 		''')
 		return {row['account_id']: self._row_to_signin_record(row) for row in cursor.fetchall()}
+
+	def get_today_total_gain(self, account_id: int) -> float:
+		"""获取指定账号当前签到周期（24小时）内的累计签到收益
+
+		基于最后一次成功签到时间，计算往后24小时内的累计收益。
+
+		Args:
+		    account_id: 账号ID
+
+		Returns:
+		    当前周期累计收益（美元）
+		"""
+		conn = self.connect()
+		# 获取最后一次成功签到的时间作为基准
+		cursor = conn.execute('''
+			SELECT signin_time
+			FROM signin_records
+			WHERE account_id = ? AND status = 'success'
+			ORDER BY signin_time DESC
+			LIMIT 1
+		''', (account_id,))
+		row = cursor.fetchone()
+		if not row:
+			return 0.0
+
+		base_time = row['signin_time']
+		# 如果是字符串，转换为datetime
+		if isinstance(base_time, str):
+			from datetime import datetime
+			base_time = datetime.fromisoformat(base_time)
+
+		# 计算24小时后的结束时间
+		from datetime import timedelta
+		end_time = base_time + timedelta(hours=24)
+
+		# 累计该时间范围内所有成功签到的收益
+		cursor = conn.execute('''
+			SELECT COALESCE(SUM(balance_diff), 0) as total_gain
+			FROM signin_records
+			WHERE account_id = ?
+			  AND status = 'success'
+			  AND balance_diff > 0
+			  AND signin_time >= ?
+			  AND signin_time < ?
+		''', (account_id, base_time.isoformat(), end_time.isoformat()))
+		row = cursor.fetchone()
+		return round(row['total_gain'], 2) if row else 0.0
 
 	def _row_to_signin_record(self, row: sqlite3.Row) -> SigninRecordRow:
 		"""将数据库行转换为 SigninRecordRow"""
