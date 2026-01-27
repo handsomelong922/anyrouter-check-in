@@ -51,25 +51,31 @@ def parse_cookies(cookies_data):
 
 
 async def get_waf_cookies_with_playwright(account_name: str, login_url: str, required_cookies: list[str]):
-	"""使用 Playwright 获取 WAF cookies（使用可见浏览器窗口绕过Cloudflare检测）"""
+	"""使用 Playwright 获取 WAF cookies（使用新 headless 模式绕过检测）"""
 	print(f'[处理中] {account_name}: 启动浏览器获取 WAF cookies...')
 
 	async with async_playwright() as p:
 		import tempfile
 
 		with tempfile.TemporaryDirectory() as temp_dir:
-			# 使用Chromium，非无头模式（Cloudflare检测）
+			# 使用 Chrome 新 headless 模式（更难被 WAF 检测）
 			context = await p.chromium.launch_persistent_context(
 				user_data_dir=temp_dir,
-				headless=False,  # 必须是False，Cloudflare会检测无头浏览器
+				headless=True,  # 使用新 headless 模式，不弹出窗口
 				user_agent='Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/138.0.0.0 Safari/537.36',
 				viewport={'width': 1920, 'height': 1080},
 				args=[
 					'--disable-blink-features=AutomationControlled',
 					'--disable-dev-shm-usage',
-					'--disable-web-security',
 					'--no-sandbox',
+					'--disable-infobars',
+					'--disable-background-timer-throttling',
+					'--disable-popup-blocking',
+					'--disable-backgrounding-occluded-windows',
+					'--disable-renderer-backgrounding',
+					'--window-size=1920,1080',
 				],
+				ignore_default_args=['--enable-automation'],
 			)
 
 			page = await context.new_page()
@@ -405,13 +411,13 @@ async def main():
 				error=str(e)[:100],
 			))
 
-	# 统计结果
-	success_count = sum(1 for r in results if r.is_success)
+	# 统计结果 - 四类状态互斥
+	success_count = sum(1 for r in results if r.is_success)  # SUCCESS + FIRST_RUN
 	failed_count = sum(1 for r in results if r.status in (SigninStatus.FAILED, SigninStatus.ERROR))
-	skipped_count = sum(1 for r in results if r.status == SigninStatus.SKIPPED)
+	cooldown_count = sum(1 for r in results if r.status in (SigninStatus.SKIPPED, SigninStatus.COOLDOWN))
 	total_count = len(results)
 
-	print(f'\n[统计] 签到完成: 成功 {success_count}, 失败 {failed_count}, 跳过 {skipped_count}, 总计 {total_count}')
+	print(f'\n[统计] 签到完成: 成功 {success_count}, 失败 {failed_count}, 冷却 {cooldown_count}, 总计 {total_count}')
 
 	# 更新签到历史
 	new_history = update_signin_history(signin_history, results)
@@ -518,8 +524,7 @@ async def main():
 
 			notification_lines.append(line)
 
-		# 统计摘要
-		cooldown_count = sum(1 for r in results if r.status in (SigninStatus.SKIPPED, SigninStatus.COOLDOWN))
+		# 统计摘要（使用统一的计数变量）
 		summary = [
 			'',
 			(
